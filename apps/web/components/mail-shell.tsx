@@ -3,19 +3,14 @@
 import {
   Archive,
   ArrowLeft,
-  AtSign,
-  Bell,
   Bookmark,
   Check,
-  ChevronDown,
   Clock3,
   Command,
-  FileText,
   Inbox,
+  Mail,
   Menu,
   MessageCircle,
-  MoreHorizontal,
-  Paperclip,
   PenLine,
   Plane,
   Plus,
@@ -24,16 +19,12 @@ import {
   Search,
   Send,
   Settings2,
-  SlidersHorizontal,
   Sparkles,
-  Star,
-  Trash2,
   X,
 } from "lucide-react";
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
   useEffect,
   useMemo,
   useRef,
@@ -58,13 +49,35 @@ type ViewId = "inbox" | "reply" | "receipts" | "travel" | "later";
 type UiAccount = {
   id: string;
   slot: AccountId;
+  provider: "google" | "microsoft";
   label: string;
   email: string;
   color: string;
   unread: number;
 };
 
+type ArchivedThread = {
+  thread: MailThread;
+  index: number;
+};
+
 const avatarTones = ["#d9f2cc", "#d7e4ff", "#f5d7ec", "#ffe2b6", "#e7ddff"];
+
+function stableTone(value: string) {
+  const hash = Array.from(value).reduce(
+    (total, character) => (total * 31 + character.charCodeAt(0)) >>> 0,
+    0,
+  );
+  return avatarTones[hash % avatarTones.length];
+}
+
+function providerName(provider?: "google" | "microsoft") {
+  return provider === "microsoft" ? "Outlook" : "Gmail";
+}
+
+function threadProvider(thread: Pick<MailThread, "provider" | "account">) {
+  return thread.provider ?? (thread.account === "studio" ? "microsoft" : "google");
+}
 
 function initials(name: string) {
   return name
@@ -179,15 +192,12 @@ function inferTag(thread: ThreadSummary) {
   if (/invoice|receipt|payment|bank|paid/.test(text)) return "Finance";
   if (/flight|hotel|booking|travel|trip/.test(text)) return "Travel";
   if (/newsletter|digest|weekly|issue/.test(text)) return "Read later";
-  return thread.unread ? "Needs reply" : undefined;
+  return thread.unread ? "Needs attention" : undefined;
 }
 
-function mapSummary(
-  thread: ThreadSummary,
-  accountIndex: Map<string, number>,
-): MailThread {
-  const index = accountIndex.get(thread.accountId) ?? 0;
-  const slot: AccountId = index % 2 === 0 ? "personal" : "studio";
+function mapSummary(thread: ThreadSummary): MailThread {
+  const slot: AccountId =
+    thread.provider === "microsoft" ? "studio" : "personal";
   const sender =
     thread.participants.find(
       (participant) => participant.address.toLowerCase() !== thread.email.toLowerCase(),
@@ -205,9 +215,10 @@ function mapSummary(
     remoteAccountId: thread.accountId,
     sourceEmail: thread.email,
     provider: thread.provider,
+    participants: thread.participants,
     unread: thread.unread,
     tag: inferTag(thread),
-    avatarTone: avatarTones[index % avatarTones.length],
+    avatarTone: stableTone(`${thread.accountId}:${senderName}`),
     messages: [],
   };
 }
@@ -238,8 +249,8 @@ const views: Array<{
   icon: typeof Inbox;
   count?: number;
 }> = [
-  { id: "inbox", label: "Everything", icon: Inbox, count: 7 },
-  { id: "reply", label: "Needs reply", icon: MessageCircle, count: 2 },
+  { id: "inbox", label: "Current", icon: Inbox, count: 7 },
+  { id: "reply", label: "Needs attention", icon: MessageCircle, count: 2 },
   { id: "receipts", label: "Money", icon: Receipt },
   { id: "travel", label: "Travel", icon: Plane },
   { id: "later", label: "Read later", icon: Bookmark },
@@ -272,13 +283,19 @@ function IconButton({
 function RichMessageBody({
   html,
   fallback,
+  author,
+  subject,
 }: {
   html?: string | null;
   fallback: string;
+  author: string;
+  subject: string;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const observer = useRef<ResizeObserver | null>(null);
   const [height, setHeight] = useState(220);
+  const [fullHeight, setFullHeight] = useState(220);
+  const [expanded, setExpanded] = useState(false);
   const document = useMemo(
     () => (html ? buildEmailDocument(html) : ""),
     [html],
@@ -304,21 +321,20 @@ function RichMessageBody({
   function fitFrame() {
     const body = frame.current?.contentDocument?.body;
     if (!body) return;
-    const nextHeight = Math.min(
-      960,
-      Math.max(180, body.scrollHeight, body.offsetHeight),
-    );
-    setHeight(nextHeight);
+    const measuredHeight = Math.max(180, body.scrollHeight, body.offsetHeight);
+    setFullHeight(measuredHeight);
+    setHeight(expanded ? measuredHeight : Math.min(960, measuredHeight));
     observer.current?.disconnect();
     observer.current = new ResizeObserver(() => {
       const nextBody = frame.current?.contentDocument?.body;
       if (!nextBody) return;
-      setHeight(
-        Math.min(
-          960,
-          Math.max(180, nextBody.scrollHeight, nextBody.offsetHeight),
-        ),
+      const measured = Math.max(
+        180,
+        nextBody.scrollHeight,
+        nextBody.offsetHeight,
       );
+      setFullHeight(measured);
+      setHeight(expanded ? measured : Math.min(960, measured));
     });
     observer.current.observe(body);
   }
@@ -331,10 +347,22 @@ function RichMessageBody({
         srcDoc={document}
         sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="no-referrer"
-        title="Rich email content"
+        title={`Message from ${author}: ${subject}`}
         style={{ height }}
         onLoad={fitFrame}
       />
+      {fullHeight > 960 && !expanded ? (
+        <button
+          className="show-full-message"
+          type="button"
+          onClick={() => {
+            setExpanded(true);
+            setHeight(fullHeight);
+          }}
+        >
+          Show full message
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -366,24 +394,30 @@ export function MailShell() {
   const [composeBusy, setComposeBusy] = useState(false);
   const [composeError, setComposeError] = useState("");
   const [realMailbox, setRealMailbox] = useState(false);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
+  const [archivedThread, setArchivedThread] = useState<ArchivedThread | null>(
+    null,
+  );
   const [connectedAccounts, setConnectedAccounts] = useState<UiAccount[]>(
     Object.values(accounts).map((account) => ({
       id: account.id,
       slot: account.id,
+      provider: account.id === "studio" ? "microsoft" : "google",
       label: account.label,
       email: account.email,
       color: account.color,
       unread: account.unread,
     })),
   );
-  const [swipe, setSwipe] = useState<{ id: string; x: number } | null>(null);
-  const pointerStart = useRef<{ id: string; x: number } | null>(null);
+  const archiveTimer = useRef<number | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const replyInput = useRef<HTMLTextAreaElement>(null);
+  const modalReturnFocus = useRef<HTMLElement | null>(null);
   const semanticWorker = useRef<Worker | null>(null);
   const indexedSignature = useRef("");
 
   useEffect(() => {
+    if (new URLSearchParams(window.location.search).has("preview")) return;
     let cancelled = false;
     async function loadMailbox() {
       const session = await fetch("/api/session").then((response) => response.json());
@@ -402,20 +436,17 @@ export function MailShell() {
       const threadPayload = (await threadResponse.json()) as {
         threads: ThreadSummary[];
       };
-      const index = new Map(
-        accountPayload.accounts.map((account, position) => [account.id, position]),
-      );
-      const nextThreads = threadPayload.threads.map((thread) =>
-        mapSummary(thread, index),
-      );
-      const nextAccounts = accountPayload.accounts.map((account, position) => {
-        const slot: AccountId = position % 2 === 0 ? "personal" : "studio";
+      const nextThreads = threadPayload.threads.map(mapSummary);
+      const nextAccounts = accountPayload.accounts.map((account) => {
+        const slot: AccountId =
+          account.provider === "microsoft" ? "studio" : "personal";
         return {
           id: account.id,
           slot,
+          provider: account.provider,
           label: account.displayName || (account.provider === "google" ? "Google" : "Outlook"),
           email: account.email,
-          color: accounts[slot].color,
+          color: account.provider === "microsoft" ? "#5278d8" : "#d94b35",
           unread: nextThreads.filter(
             (thread) => thread.remoteAccountId === account.id && thread.unread,
           ).length,
@@ -451,7 +482,7 @@ export function MailShell() {
           (thread.remoteAccountId ?? thread.account) === accountFilter,
       )
       .filter((thread) => {
-        if (activeView === "reply") return thread.tag === "Needs reply";
+        if (activeView === "reply") return thread.unread;
         if (activeView === "receipts")
           return thread.tag === "Finance" || thread.tag === "Receipt";
         if (activeView === "travel") return thread.tag === "Travel";
@@ -462,6 +493,28 @@ export function MailShell() {
 
   const selected =
     threads.find((thread) => thread.id === selectedId) ?? filteredThreads[0];
+
+  const groupedThreads = useMemo(() => {
+    const attention = filteredThreads.filter((thread) => thread.unread);
+    const updates = filteredThreads.filter(
+      (thread) =>
+        !thread.unread &&
+        ["Finance", "Receipt", "Travel", "Read later"].includes(
+          thread.tag ?? "",
+        ),
+    );
+    const groupedIds = new Set(
+      [...attention, ...updates].map((thread) => thread.id),
+    );
+    const earlier = filteredThreads.filter(
+      (thread) => !groupedIds.has(thread.id),
+    );
+    return [
+      { id: "attention", label: "Needs attention", threads: attention },
+      { id: "updates", label: "Updates", threads: updates },
+      { id: "earlier", label: "Earlier", threads: earlier },
+    ].filter((group) => group.threads.length);
+  }, [filteredThreads]);
 
   const semanticResults = useMemo(() => {
     if (!searchQuery.trim()) return threads.slice(0, 4);
@@ -487,7 +540,7 @@ export function MailShell() {
       return threads.filter((thread) => thread.id === "flight");
     }
     if (/reply|respond|waiting/.test(terms)) {
-      return threads.filter((thread) => thread.tag === "Needs reply");
+      return threads.filter((thread) => thread.unread);
     }
     return threads.slice(0, 3);
   }, [searchQuery, semanticMatches, threads]);
@@ -582,8 +635,13 @@ export function MailShell() {
         target.tagName === "TEXTAREA" ||
         target.isContentEditable;
 
-      if (event.key === "/" && !isTyping) {
+      if (
+        ((event.metaKey || event.ctrlKey) &&
+          event.key.toLowerCase() === "k") ||
+        (event.key === "/" && !isTyping)
+      ) {
         event.preventDefault();
+        modalReturnFocus.current = document.activeElement as HTMLElement;
         setSearchOpen(true);
       }
       if (event.key.toLowerCase() === "c" && !isTyping) {
@@ -592,7 +650,9 @@ export function MailShell() {
       }
       if (event.key === "Escape") {
         setSearchOpen(false);
+        setComposeOpen(false);
         setMenuOpen(false);
+        modalReturnFocus.current?.focus();
       }
       if (isTyping || searchOpen) return;
       const index = filteredThreads.findIndex((thread) => thread.id === selectedId);
@@ -621,9 +681,46 @@ export function MailShell() {
     }
   }, [searchOpen]);
 
+  useEffect(() => {
+    if (!searchOpen && !composeOpen) return;
+    const selector = searchOpen ? ".search-command" : ".compose-modal";
+    const trapFocus = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const dialog = document.querySelector<HTMLElement>(selector);
+      const focusable = Array.from(
+        dialog?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      );
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", trapFocus);
+    return () => window.removeEventListener("keydown", trapFocus);
+  }, [composeOpen, searchOpen]);
+
+  useEffect(() => {
+    const resetResponsiveState = () => {
+      if (window.innerWidth >= 700) {
+        setMobileThreadOpen(false);
+        setMenuOpen(false);
+      }
+    };
+    window.addEventListener("resize", resetResponsiveState);
+    return () => window.removeEventListener("resize", resetResponsiveState);
+  }, []);
+
   async function chooseThread(id: string) {
     setSelectedId(id);
-    setMobileThreadOpen(true);
+    if (window.innerWidth < 700) setMobileThreadOpen(true);
     setThreads((current) =>
       current.map((thread) =>
         thread.id === id ? { ...thread, unread: false } : thread,
@@ -645,54 +742,73 @@ export function MailShell() {
     }
   }
 
-  function archiveThread(id: string) {
-    const thread = threads.find((candidate) => candidate.id === id);
-    if (thread?.remoteAccountId) {
-      void fetch(`/api/threads/${encodeURIComponent(id)}/action`, {
+  async function commitArchive(entry: ArchivedThread) {
+    if (!entry.thread.remoteAccountId) return;
+    const response = await fetch(
+      `/api/threads/${encodeURIComponent(entry.thread.id)}/action`,
+      {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "archive" }),
-      });
-    }
-    setThreads((current) => current.filter((thread) => thread.id !== id));
-    const remaining = filteredThreads.filter((thread) => thread.id !== id);
-    if (selectedId === id && remaining[0]) setSelectedId(remaining[0].id);
-    setMobileThreadOpen(false);
-  }
-
-  function toggleRead(id: string) {
-    const thread = threads.find((candidate) => candidate.id === id);
-    const nextUnread = !thread?.unread;
-    if (thread?.remoteAccountId) {
-      void fetch(`/api/threads/${encodeURIComponent(id)}/action`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: nextUnread ? "unread" : "read" }),
-      });
-    }
-    setThreads((current) =>
-      current.map((thread) =>
-        thread.id === id ? { ...thread, unread: !thread.unread } : thread,
-      ),
+      },
     );
+    if (!response.ok) {
+      setThreads((current) => {
+        if (current.some((thread) => thread.id === entry.thread.id)) {
+          return current;
+        }
+        const restored = [...current];
+        restored.splice(Math.min(entry.index, restored.length), 0, entry.thread);
+        return restored;
+      });
+      setMailError("Archive failed. The conversation was restored.");
+    }
   }
 
-  function onPointerDown(event: ReactPointerEvent, id: string) {
-    pointerStart.current = { id, x: event.clientX };
-    event.currentTarget.setPointerCapture(event.pointerId);
+  function archiveThread(id: string) {
+    const thread = threads.find((candidate) => candidate.id === id);
+    if (!thread || archivingId === id) return;
+    if (archiveTimer.current && archivedThread) {
+      window.clearTimeout(archiveTimer.current);
+      void commitArchive(archivedThread);
+    }
+    const index = threads.findIndex((candidate) => candidate.id === id);
+    setArchivingId(id);
+    window.setTimeout(() => {
+      const entry = { thread, index };
+      setThreads((current) =>
+        current.filter((candidate) => candidate.id !== id),
+      );
+      const remaining = filteredThreads.filter(
+        (candidate) => candidate.id !== id,
+      );
+      if (selectedId === id) setSelectedId(remaining[0]?.id ?? "");
+      if (window.innerWidth < 700) setMobileThreadOpen(false);
+      setArchivingId(null);
+      setArchivedThread(entry);
+      archiveTimer.current = window.setTimeout(() => {
+        void commitArchive(entry);
+        setArchivedThread(null);
+        archiveTimer.current = null;
+      }, 5000);
+    }, 160);
   }
 
-  function onPointerMove(event: ReactPointerEvent, id: string) {
-    if (pointerStart.current?.id !== id) return;
-    const x = Math.max(-116, Math.min(116, event.clientX - pointerStart.current.x));
-    if (Math.abs(x) > 5) setSwipe({ id, x });
-  }
-
-  function onPointerUp(id: string) {
-    if (swipe?.id === id && swipe.x < -82) archiveThread(id);
-    if (swipe?.id === id && swipe.x > 82) toggleRead(id);
-    setSwipe(null);
-    pointerStart.current = null;
+  function undoArchive() {
+    if (!archivedThread) return;
+    if (archiveTimer.current) window.clearTimeout(archiveTimer.current);
+    setThreads((current) => {
+      const restored = [...current];
+      restored.splice(
+        Math.min(archivedThread.index, restored.length),
+        0,
+        archivedThread.thread,
+      );
+      return restored;
+    });
+    setSelectedId(archivedThread.thread.id);
+    setArchivedThread(null);
+    archiveTimer.current = null;
   }
 
   function openComposer() {
@@ -705,7 +821,23 @@ export function MailShell() {
       accountId: current.accountId || connectedAccounts[0]?.id || "",
     }));
     setComposeError("");
+    modalReturnFocus.current = document.activeElement as HTMLElement;
     setComposeOpen(true);
+  }
+
+  function closeComposer() {
+    setComposeOpen(false);
+    window.setTimeout(() => modalReturnFocus.current?.focus(), 0);
+  }
+
+  function openSearch() {
+    modalReturnFocus.current = document.activeElement as HTMLElement;
+    setSearchOpen(true);
+  }
+
+  function closeSearch() {
+    setSearchOpen(false);
+    window.setTimeout(() => modalReturnFocus.current?.focus(), 0);
   }
 
   async function sendNewMessage() {
@@ -735,9 +867,34 @@ export function MailShell() {
   async function sendReply() {
     if (!reply.trim() || !selected) return;
     const text = reply.trim();
+    const threadId = selected.id;
+    const optimisticId = `reply-${Date.now()}`;
     setMailError("");
+    setReply("");
+    setSending(true);
+    setThreads((current) =>
+      current.map((thread) =>
+        thread.id === threadId
+          ? {
+              ...thread,
+              preview: text,
+              messages: [
+                ...thread.messages,
+                {
+                  id: optimisticId,
+                  author: "You",
+                  email: thread.sourceEmail || accounts[thread.account].email,
+                  time: "Now",
+                  body: text,
+                  outgoing: true,
+                  pending: Boolean(thread.remoteAccountId),
+                },
+              ],
+            }
+          : thread,
+      ),
+    );
     if (selected.remoteAccountId) {
-      setSending(true);
       const response = await fetch(
         `/api/threads/${encodeURIComponent(selected.id)}/reply`,
         {
@@ -750,32 +907,38 @@ export function MailShell() {
       if (!response.ok) {
         const payload = await response.json();
         setMailError(payload.error || "Could not send this reply.");
+        setThreads((current) =>
+          current.map((thread) =>
+            thread.id === threadId
+              ? {
+                  ...thread,
+                  messages: thread.messages.map((message) =>
+                    message.id === optimisticId
+                      ? { ...message, pending: false, failed: true }
+                      : message,
+                  ),
+                }
+              : thread,
+          ),
+        );
         return;
       }
     }
+    setSending(false);
     setThreads((current) =>
       current.map((thread) =>
-        thread.id === selected.id
+        thread.id === threadId
           ? {
               ...thread,
-              preview: text,
-              messages: [
-                ...thread.messages,
-                {
-                  id: `reply-${Date.now()}`,
-                  author: "You",
-                  email:
-                    thread.sourceEmail || accounts[thread.account].email,
-                  time: "Now",
-                  body: text,
-                  outgoing: true,
-                },
-              ],
+              messages: thread.messages.map((message) =>
+                message.id === optimisticId
+                  ? { ...message, pending: false }
+                  : message,
+              ),
             }
           : thread,
       ),
     );
-    setReply("");
     setSent(true);
     window.setTimeout(() => setSent(false), 1800);
   }
@@ -784,19 +947,16 @@ export function MailShell() {
 
   return (
     <main className="mail-stage">
-      <div className="ambient ambient-one" />
-      <div className="ambient ambient-two" />
-
       <section
         className={`mail-app ${mobileThreadOpen ? "mobile-thread-open" : ""}`}
         aria-label="Unified mail application"
       >
         <aside className={`sidebar ${menuOpen ? "sidebar-open" : ""}`}>
           <div className="brand-row">
-            <div className="brand-mark">rb</div>
+            <div className="brand-mark">R</div>
             <div>
-              <strong>mail</strong>
-              <span>one quiet place</span>
+              <strong>rb/mail</strong>
+              <span>all your conversations</span>
             </div>
             <IconButton
               label="Close menu"
@@ -859,11 +1019,11 @@ export function MailShell() {
                     className="account-glyph"
                     style={{ "--account-color": account.color } as CSSProperties}
                   >
-                    {account.label.slice(0, 1).toUpperCase()}
+                    <Mail size={14} />
                   </span>
                   <span>
                     <strong>{account.label}</strong>
-                    <small>{account.email}</small>
+                    <small>{providerName(account.provider)} · {account.email}</small>
                   </span>
                   <em>{account.unread}</em>
                 </button>
@@ -914,7 +1074,12 @@ export function MailShell() {
                     "Everything"}
                 </h1>
               </div>
-              <button className="all-account-pill" type="button">
+              <button
+                className="all-account-pill"
+                type="button"
+                aria-label="Show all accounts"
+                onClick={() => setAccountFilter("all")}
+              >
                 <span className="stacked-dots">
                   {(connectedAccounts.length
                     ? connectedAccounts.slice(0, 2)
@@ -930,18 +1095,18 @@ export function MailShell() {
                   ? "All accounts"
                   : connectedAccounts.find((account) => account.id === accountFilter)
                       ?.label || "Account"}
-                <ChevronDown size={14} />
+                {accountFilter !== "all" ? <X size={13} /> : null}
               </button>
             </div>
 
             <button
               className="search-trigger"
               type="button"
-              onClick={() => setSearchOpen(true)}
+              onClick={openSearch}
             >
               <Search size={17} />
               <span>Ask anything about your mail</span>
-              <kbd>/</kbd>
+              <kbd>⌘ K</kbd>
             </button>
           </header>
 
@@ -955,76 +1120,78 @@ export function MailShell() {
                   }`
                 : ""}
             </span>
-            <div>
-              <IconButton label="Filter conversations">
-                <SlidersHorizontal size={16} />
-              </IconButton>
-              <IconButton label="More list options">
-                <MoreHorizontal size={17} />
-              </IconButton>
-            </div>
           </div>
 
-          <div className="thread-list" role="list">
+          <ul className="thread-list" aria-label="Conversations">
             {filteredThreads.length ? (
-              filteredThreads.map((thread, index) => {
-                const account = accounts[thread.account];
-                const swipeX = swipe?.id === thread.id ? swipe.x : 0;
-                return (
-                  <div
-                    className="thread-swipe-wrap"
-                    key={thread.id}
-                    style={{ "--row-delay": `${index * 34}ms` } as CSSProperties}
-                  >
-                    <div className="swipe-action swipe-read">
-                      <Check size={18} />
-                      {thread.unread ? "Read" : "Unread"}
-                    </div>
-                    <div className="swipe-action swipe-archive">
-                      <Archive size={18} />
-                      Archive
-                    </div>
-                    <button
-                      className={`thread-row ${
-                        selected?.id === thread.id ? "selected" : ""
-                      } ${thread.unread ? "unread" : ""}`}
-                      type="button"
-                      role="listitem"
-                      style={{ transform: `translateX(${swipeX}px)` }}
-                      onClick={() => {
-                        if (Math.abs(swipeX) < 8) void chooseThread(thread.id);
-                      }}
-                      onPointerDown={(event) => onPointerDown(event, thread.id)}
-                      onPointerMove={(event) => onPointerMove(event, thread.id)}
-                      onPointerUp={() => onPointerUp(thread.id)}
-                      onPointerCancel={() => onPointerUp(thread.id)}
+              groupedThreads.flatMap((group, groupIndex) => [
+                <li className="thread-group-label" key={`${group.id}-label`}>
+                  <span>{group.label}</span>
+                  <em>{group.threads.length}</em>
+                </li>,
+                ...group.threads.map((thread, threadIndex) => {
+                  const providerId = threadProvider(thread);
+                  const provider = providerName(providerId);
+                  const animationIndex = groupIndex * 2 + threadIndex;
+                  return (
+                    <li
+                      className={`thread-swipe-wrap ${
+                        archivingId === thread.id ? "archiving" : ""
+                      }`}
+                      key={thread.id}
+                      style={{
+                        "--row-delay": `${Math.min(animationIndex, 6) * 22}ms`,
+                      } as CSSProperties}
                     >
-                      <span
-                        className="avatar"
-                        style={{ background: thread.avatarTone }}
+                      <button
+                        className={`thread-row ${
+                          selected?.id === thread.id ? "selected" : ""
+                        } ${thread.unread ? "unread" : ""}`}
+                        type="button"
+                        aria-current={selected?.id === thread.id ? "true" : undefined}
+                        aria-label={`${thread.unread ? "Unread, " : ""}${thread.sender}, ${thread.subject}, ${thread.time}, ${provider}`}
+                        onClick={() => void chooseThread(thread.id)}
                       >
-                        {thread.initials}
-                        <i style={{ background: account.color }} />
-                      </span>
-                      <span className="thread-copy">
-                        <span className="thread-meta">
-                          <strong>{thread.sender}</strong>
-                          <time>{thread.time}</time>
+                        <span
+                          className="avatar"
+                          style={{ background: thread.avatarTone }}
+                        >
+                          {thread.initials}
+                          <i
+                            className={`provider-mark provider-${providerId}`}
+                            title={provider}
+                          >
+                            <Mail size={9} />
+                          </i>
                         </span>
-                        <span className="thread-subject">{thread.subject}</span>
-                        <span className="thread-preview">{thread.preview}</span>
-                        <span className="thread-foot">
-                          {thread.tag ? <em>{thread.tag}</em> : null}
-                          <small>{account.label}</small>
+                        <span className="thread-copy">
+                          <span className="thread-meta">
+                            <strong>{thread.sender}</strong>
+                            <time>{thread.time}</time>
+                          </span>
+                          <span className="thread-subject">{thread.subject}</span>
+                          <span className="thread-preview">{thread.preview}</span>
                         </span>
-                      </span>
-                      {thread.unread ? <span className="unread-dot" /> : null}
-                    </button>
-                  </div>
-                );
-              })
+                        {thread.unread ? (
+                          <span className="unread-indicator" aria-hidden="true">
+                            New
+                          </span>
+                        ) : null}
+                      </button>
+                      <div className="row-action-rail">
+                        <IconButton
+                          label={`Archive ${thread.subject}`}
+                          onClick={() => archiveThread(thread.id)}
+                        >
+                          <Archive size={15} />
+                        </IconButton>
+                      </div>
+                    </li>
+                  );
+                }),
+              ])
             ) : (
-              <div className="empty-view">
+              <li className="empty-view">
                 <span>
                   <Check size={26} />
                 </span>
@@ -1043,35 +1210,14 @@ export function MailShell() {
                     Connect an account
                   </button>
                 ) : null}
-              </div>
+              </li>
             )}
-          </div>
+          </ul>
 
-          <nav className="mobile-tabbar mobile-only" aria-label="Primary">
-            <button className="active" type="button">
-              <Inbox size={20} />
-              Mail
-            </button>
-            <button type="button" onClick={() => setSearchOpen(true)}>
-              <Search size={20} />
-              Search
-            </button>
-            <button className="mobile-compose" type="button" onClick={openComposer}>
-              <Plus size={23} />
-            </button>
-            <button type="button">
-              <Bell size={20} />
-              Later
-            </button>
-            <button type="button" onClick={() => setMenuOpen(true)}>
-              <Menu size={20} />
-              More
-            </button>
-          </nav>
         </section>
 
         {selected ? (
-          <section className="thread-panel" key={selected.id}>
+          <section className="thread-panel">
             <header className="thread-header">
               <IconButton
                 className="mobile-only"
@@ -1082,23 +1228,28 @@ export function MailShell() {
               </IconButton>
               <div className="thread-heading">
                 <span className="conversation-kicker">
-                  <i style={{ background: accounts[selected.account].color }} />
+                  <Mail size={13} />
+                  {providerName(threadProvider(selected))}
+                  <span aria-hidden="true">·</span>
                   {selected.sourceEmail || accounts[selected.account].email}
                 </span>
                 <h2>{selected.subject}</h2>
+                {selected.participants?.length ? (
+                  <div className="participant-chips" aria-label="Participants">
+                    {selected.participants.slice(0, 3).map((participant) => (
+                      <span key={participant.address}>
+                        {participant.name || participant.address}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
               </div>
               <div className="thread-actions">
-                <IconButton label="Snooze">
-                  <Clock3 size={17} />
-                </IconButton>
                 <IconButton
                   label="Archive"
                   onClick={() => archiveThread(selected.id)}
                 >
                   <Archive size={17} />
-                </IconButton>
-                <IconButton label="More">
-                  <MoreHorizontal size={18} />
                 </IconButton>
               </div>
             </header>
@@ -1109,13 +1260,14 @@ export function MailShell() {
               </div>
 
               <div className="message-stream">
-                {selected.messages.map((message, index) => (
+                {selected.messages.map((message) => (
                   <article
                     className={`message-card ${
                       message.outgoing ? "outgoing" : "incoming"
-                    } ${message.html ? "has-rich-content" : ""}`}
+                    } ${message.html ? "has-rich-content" : ""} ${
+                      message.pending ? "pending" : ""
+                    } ${message.failed ? "failed" : ""}`}
                     key={message.id}
-                    style={{ "--message-delay": `${index * 90}ms` } as CSSProperties}
                   >
                     <header>
                       <div className="mini-avatar">
@@ -1125,53 +1277,47 @@ export function MailShell() {
                         <strong>{message.author}</strong>
                         <small>{message.email}</small>
                       </span>
-                      <time>{message.time}</time>
-                      <IconButton label="Message options">
-                        <MoreHorizontal size={16} />
-                      </IconButton>
+                      <time>
+                        {message.failed
+                          ? "Couldn’t send"
+                          : message.pending
+                            ? "Sending…"
+                            : message.time}
+                      </time>
                     </header>
-                    <RichMessageBody html={message.html} fallback={message.body} />
-                    {selected.id === "invoice" && index === 0 ? (
-                      <button className="attachment-card" type="button">
-                        <span>
-                          <FileText size={19} />
-                        </span>
-                        <span>
-                          <strong>Invoice-1048-revised.pdf</strong>
-                          <small>PDF · 184 KB</small>
-                        </span>
-                        <ChevronDown size={16} />
-                      </button>
-                    ) : null}
+                    <RichMessageBody
+                      html={message.html}
+                      fallback={message.body}
+                      author={message.author}
+                      subject={selected.subject}
+                    />
+                    <div className="message-action-rail">
+                      <IconButton
+                        label={`Reply to ${message.author}`}
+                        onClick={() => replyInput.current?.focus()}
+                      >
+                        <Reply size={15} />
+                      </IconButton>
+                    </div>
                   </article>
                 ))}
               </div>
 
               {mailError ? <div className="reply-error">{mailError}</div> : null}
-              <div className="smart-nudge">
-                <Sparkles size={15} />
-                <span>
-                  {selected.tag === "Needs reply"
-                    ? "This looks like it needs a reply."
-                    : "Caught up. Nothing needed from you."}
-                </span>
-                {selected.tag === "Needs reply" ? (
-                  <button type="button" onClick={() => replyInput.current?.focus()}>
-                    Draft it
-                  </button>
-                ) : null}
-              </div>
             </div>
 
             <footer className="reply-dock">
               <div className="reply-box">
                 <div className="reply-mode">
-                  <button type="button">
+                  <span className="replying-to">
                     <Reply size={14} />
                     Reply to {selected.sender.split(" ")[0]}
-                    <ChevronDown size={13} />
-                  </button>
-                  <span>from {selected.sourceEmail || accounts[selected.account].email}</span>
+                  </span>
+                  <span className="replying-as">
+                    <Mail size={13} />
+                    Replying as {providerName(threadProvider(selected))} ·{" "}
+                    {selected.sourceEmail || accounts[selected.account].email}
+                  </span>
                 </div>
                 <textarea
                   ref={replyInput}
@@ -1187,17 +1333,7 @@ export function MailShell() {
                   }}
                 />
                 <div className="composer-actions">
-                  <div>
-                    <IconButton label="Attach a file">
-                      <Paperclip size={17} />
-                    </IconButton>
-                    <IconButton label="Insert mention">
-                      <AtSign size={17} />
-                    </IconButton>
-                    <IconButton label="Writing tools">
-                      <Sparkles size={17} />
-                    </IconButton>
-                  </div>
+                  <span className="composer-hint">⌘ Enter to send</span>
                   <button
                     className={`send-button ${reply.trim() ? "ready" : ""}`}
                     type="button"
@@ -1226,13 +1362,21 @@ export function MailShell() {
         )}
       </section>
 
+      {archivedThread ? (
+        <div className="undo-toast" role="status" aria-live="polite">
+          <span>Conversation archived</span>
+          <button type="button" onClick={undoArchive}>
+            Undo
+          </button>
+        </div>
+      ) : null}
+
       {composeOpen ? (
         <div className="compose-layer" role="dialog" aria-modal="true" aria-label="New message">
-          <button
+          <div
             className="search-scrim"
-            type="button"
-            aria-label="Close composer"
-            onClick={() => setComposeOpen(false)}
+            aria-hidden="true"
+            onMouseDown={closeComposer}
           />
           <section className="compose-modal">
             <header>
@@ -1240,7 +1384,7 @@ export function MailShell() {
                 <span>New conversation</span>
                 <h2>Write a message</h2>
               </div>
-              <IconButton label="Close composer" onClick={() => setComposeOpen(false)}>
+              <IconButton label="Close composer" onClick={closeComposer}>
                 <X size={18} />
               </IconButton>
             </header>
@@ -1302,11 +1446,7 @@ export function MailShell() {
             />
             {composeError ? <div className="settings-error">{composeError}</div> : null}
             <footer>
-              <div>
-                <IconButton label="Attach a file">
-                  <Paperclip size={17} />
-                </IconButton>
-              </div>
+              <span>⌘ Enter to send</span>
               <button
                 className="settings-primary"
                 type="button"
@@ -1333,11 +1473,10 @@ export function MailShell() {
           aria-modal="true"
           aria-label="Search all mail"
         >
-          <button
+          <div
             className="search-scrim"
-            aria-label="Close search"
-            type="button"
-            onClick={() => setSearchOpen(false)}
+            aria-hidden="true"
+            onMouseDown={closeSearch}
           />
           <section className="search-command">
             <header>
@@ -1378,7 +1517,6 @@ export function MailShell() {
                     onClick={() => setSearchQuery(suggestion)}
                   >
                     {suggestion}
-                    <span>↗</span>
                   </button>
                 ))}
               </div>
@@ -1403,7 +1541,7 @@ export function MailShell() {
                   key={thread.id}
                   onClick={() => {
                     void chooseThread(thread.id);
-                    setSearchOpen(false);
+                    closeSearch();
                   }}
                 >
                   <span
@@ -1411,7 +1549,12 @@ export function MailShell() {
                     style={{ background: thread.avatarTone }}
                   >
                     {thread.initials}
-                    <i style={{ background: accounts[thread.account].color }} />
+                    <i
+                      className={`provider-mark provider-${threadProvider(thread)}`}
+                      title={providerName(threadProvider(thread))}
+                    >
+                      <Mail size={9} />
+                    </i>
                   </span>
                   <span>
                     <strong>{thread.subject}</strong>

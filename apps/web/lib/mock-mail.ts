@@ -8,6 +8,8 @@ export type Message = {
   body: string;
   html?: string | null;
   outgoing?: boolean;
+  pending?: boolean;
+  failed?: boolean;
 };
 
 export type MailThread = {
@@ -22,6 +24,7 @@ export type MailThread = {
   remoteAccountId?: string;
   sourceEmail?: string;
   provider?: "google" | "microsoft";
+  participants?: Array<{ name: string; address: string }>;
   unread: boolean;
   pinned?: boolean;
   tag?: string;
@@ -59,8 +62,12 @@ export const initialThreads: MailThread[] = [
     account: "studio",
     unread: true,
     pinned: true,
-    tag: "Needs reply",
+    tag: "Needs attention",
     avatarTone: "#d9f2cc",
+    participants: [
+      { name: "Maya Chen", address: "maya@fieldwork.design" },
+      { name: "You", address: "rb@studio.co" },
+    ],
     messages: [
       {
         id: "m1",
