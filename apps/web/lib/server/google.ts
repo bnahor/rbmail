@@ -44,7 +44,11 @@ async function accessToken(account: StoredAccount): Promise<string> {
     return account.token.accessToken;
   }
   if (!account.token.refreshToken) throw new Error("Google refresh token missing.");
-  const refreshed = await refreshGoogleToken(account.token.refreshToken);
+  const nextToken = await refreshGoogleToken(account.token.refreshToken);
+  const refreshed = {
+    ...nextToken,
+    scope: nextToken.scope || account.token.scope,
+  };
   updateAccountToken(account.id, refreshed);
   account.token = refreshed;
   return refreshed.accessToken;

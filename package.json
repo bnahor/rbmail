@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "pnpm --filter @rbmail/web dev",
     "build": "pnpm --filter @rbmail/web build",
+    "test": "pnpm --filter @rbmail/web test",
     "typecheck": "pnpm --filter @rbmail/web typecheck",
     "desktop:build": "bash scripts/build-macos.sh",
     "desktop:open": "open dist/RBMail.app"

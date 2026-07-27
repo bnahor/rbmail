@@ -1,5 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
 
+import {
+  GOOGLE_SCOPES,
+  MICROSOFT_SCOPES,
+} from "@/lib/mail/calendar-core";
 import type { Provider, StoredToken } from "@/lib/mail/types";
 import {
   consumeOauthState,
@@ -42,13 +46,7 @@ export function getAuthorizationUrl(provider: Provider): string {
       state,
       code_challenge: challenge,
       code_challenge_method: "S256",
-      scope: [
-        "openid",
-        "email",
-        "profile",
-        "https://www.googleapis.com/auth/gmail.modify",
-        "https://www.googleapis.com/auth/gmail.send",
-      ].join(" "),
+      scope: GOOGLE_SCOPES.join(" "),
     });
     return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
   }
@@ -62,15 +60,7 @@ export function getAuthorizationUrl(provider: Provider): string {
     state,
     code_challenge: challenge,
     code_challenge_method: "S256",
-    scope: [
-      "openid",
-      "profile",
-      "email",
-      "offline_access",
-      "User.Read",
-      "Mail.ReadWrite",
-      "Mail.Send",
-    ].join(" "),
+    scope: MICROSOFT_SCOPES.join(" "),
   });
   return `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize?${params}`;
 }
@@ -153,15 +143,7 @@ export async function completeMicrosoftOauth(code: string, state: string) {
       grant_type: "authorization_code",
       code,
       code_verifier: verifier,
-      scope: [
-        "openid",
-        "profile",
-        "email",
-        "offline_access",
-        "User.Read",
-        "Mail.ReadWrite",
-        "Mail.Send",
-      ].join(" "),
+      scope: MICROSOFT_SCOPES.join(" "),
     },
   );
   const token = normalizeToken(payload);
@@ -212,15 +194,7 @@ export async function refreshMicrosoftToken(refreshToken: string) {
       client_secret: required("MICROSOFT_CLIENT_SECRET"),
       grant_type: "refresh_token",
       refresh_token: refreshToken,
-      scope: [
-        "openid",
-        "profile",
-        "email",
-        "offline_access",
-        "User.Read",
-        "Mail.ReadWrite",
-        "Mail.Send",
-      ].join(" "),
+      scope: MICROSOFT_SCOPES.join(" "),
     },
   );
   return normalizeToken({

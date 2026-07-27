@@ -1,4 +1,5 @@
 import { appUrl, completeMicrosoftOauth } from "@/lib/server/oauth";
+import { syncAccountCalendars } from "@/lib/server/calendar";
 import { syncAccount } from "@/lib/server/sync";
 
 export const runtime = "nodejs";
@@ -17,7 +18,10 @@ export async function GET(request: Request) {
   }
   try {
     const account = await completeMicrosoftOauth(code, state);
-    await syncAccount(account.id, 1);
+    await Promise.all([
+      syncAccount(account.id, 1),
+      syncAccountCalendars(account.id),
+    ]);
     return Response.redirect(
       new URL(`/settings?connected=microsoft`, publicOrigin),
     );

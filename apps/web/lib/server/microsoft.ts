@@ -48,7 +48,11 @@ async function accessToken(account: StoredAccount): Promise<string> {
   if (!account.token.refreshToken) {
     throw new Error("Microsoft refresh token missing.");
   }
-  const refreshed = await refreshMicrosoftToken(account.token.refreshToken);
+  const nextToken = await refreshMicrosoftToken(account.token.refreshToken);
+  const refreshed = {
+    ...nextToken,
+    scope: nextToken.scope || account.token.scope,
+  };
   updateAccountToken(account.id, refreshed);
   account.token = refreshed;
   return refreshed.accessToken;

@@ -4,6 +4,7 @@ import {
   Archive,
   ArrowLeft,
   Bookmark,
+  CalendarDays,
   Check,
   Clock3,
   Command,
@@ -25,6 +26,7 @@ import {
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -32,19 +34,24 @@ import {
 } from "react";
 
 import {
+  CalendarWorkspace,
+  type ScheduleSeed,
+} from "@/components/calendar-workspace";
+import {
   accounts,
   initialThreads,
   type AccountId,
   type MailThread,
 } from "@/lib/mock-mail";
 import type {
+  CalendarEventSummary,
   PublicAccount,
   ThreadDetail,
   ThreadSummary,
 } from "@/lib/mail/types";
 
 type AccountFilter = "all" | string;
-type ViewId = "inbox" | "reply" | "receipts" | "travel" | "later";
+type ViewId = "inbox" | "today" | "reply" | "receipts" | "travel" | "later";
 
 type UiAccount = {
   id: string;
@@ -54,6 +61,7 @@ type UiAccount = {
   email: string;
   color: string;
   unread: number;
+  capabilities: PublicAccount["capabilities"];
 };
 
 type ArchivedThread = {
@@ -99,6 +107,21 @@ function displayTime(value: string) {
   yesterday.setDate(today.getDate() - 1);
   if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
   return date.toLocaleDateString([], { weekday: "short" });
+}
+
+function eventTimeForSearch(
+  event: Pick<CalendarEventSummary, "start" | "allDay">,
+) {
+  const date = new Date(event.start);
+  const day = date.toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  });
+  if (event.allDay) return `${day} · All day`;
+  return `${day} · ${date.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  })}`;
 }
 
 function cleanDisplayText(value: string): string {
@@ -250,6 +273,7 @@ const views: Array<{
   count?: number;
 }> = [
   { id: "inbox", label: "Current", icon: Inbox, count: 7 },
+  { id: "today", label: "Today", icon: CalendarDays },
   { id: "reply", label: "Needs attention", icon: MessageCircle },
   { id: "receipts", label: "Money", icon: Receipt },
   { id: "travel", label: "Travel", icon: Plane },
@@ -393,6 +417,11 @@ export function MailShell() {
   });
   const [composeBusy, setComposeBusy] = useState(false);
   const [composeError, setComposeError] = useState("");
+  const [scheduleSeed, setScheduleSeed] = useState<ScheduleSeed | null>(null);
+  const [calendarSearchResults, setCalendarSearchResults] = useState<
+    CalendarEventSummary[]
+  >([]);
+  const [calendarTargetId, setCalendarTargetId] = useState<string | null>(null);
   const [realMailbox, setRealMailbox] = useState(false);
   const [archivingId, setArchivingId] = useState<string | null>(null);
   const [archivedThread, setArchivedThread] = useState<ArchivedThread | null>(
@@ -407,6 +436,7 @@ export function MailShell() {
       email: account.email,
       color: account.color,
       unread: account.unread,
+      capabilities: { mail: true, calendar: false },
     })),
   );
   const archiveTimer = useRef<number | null>(null);
@@ -450,6 +480,7 @@ export function MailShell() {
           unread: nextThreads.filter(
             (thread) => thread.remoteAccountId === account.id && thread.unread,
           ).length,
+          capabilities: account.capabilities,
         };
       });
       setRealMailbox(true);
@@ -628,6 +659,36 @@ export function MailShell() {
   }, [searchQuery]);
 
   useEffect(() => {
+    if (!searchOpen || !searchQuery.trim() || !realMailbox) {
+      setCalendarSearchResults([]);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const to = new Date();
+      to.setMonth(to.getMonth() + 6);
+      const response = await fetch(
+        `/api/calendar/events?from=${encodeURIComponent(
+          from.toISOString(),
+        )}&to=${encodeURIComponent(to.toISOString())}&q=${encodeURIComponent(
+          searchQuery.trim(),
+        )}`,
+        { signal: controller.signal },
+      ).catch(() => null);
+      if (!response?.ok) return;
+      const payload = (await response.json()) as {
+        events: CalendarEventSummary[];
+      };
+      setCalendarSearchResults(payload.events.slice(0, 4));
+    }, 180);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [realMailbox, searchOpen, searchQuery]);
+
+  useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       const target = event.target as HTMLElement;
       const isTyping =
@@ -654,7 +715,7 @@ export function MailShell() {
         setMenuOpen(false);
         modalReturnFocus.current?.focus();
       }
-      if (isTyping || searchOpen) return;
+      if (isTyping || searchOpen || activeView === "today") return;
       const index = filteredThreads.findIndex((thread) => thread.id === selectedId);
       if (event.key === "j") {
         const next = filteredThreads[Math.min(index + 1, filteredThreads.length - 1)];
@@ -839,6 +900,27 @@ export function MailShell() {
     setSearchOpen(false);
     window.setTimeout(() => modalReturnFocus.current?.focus(), 0);
   }
+
+  function scheduleThread(thread: MailThread) {
+    const ownAddresses = new Set(
+      connectedAccounts.map((account) => account.email.toLowerCase()),
+    );
+    const attendeeEmails = (thread.participants || [])
+      .map((participant) => participant.address.trim().toLowerCase())
+      .filter((address) => address && !ownAddresses.has(address));
+    setScheduleSeed({
+      threadId: thread.id,
+      title: thread.subject,
+      attendeeEmails: [...new Set(attendeeEmails)],
+      accountId: thread.remoteAccountId,
+    });
+    setActiveView("today");
+    setMobileThreadOpen(false);
+  }
+
+  const handleScheduleHandled = useCallback(() => {
+    setScheduleSeed(null);
+  }, []);
 
   async function sendNewMessage() {
     if (!compose.to.trim() || !compose.subject.trim() || !compose.body.trim()) return;
@@ -1057,6 +1139,18 @@ export function MailShell() {
           />
         ) : null}
 
+        {activeView === "today" ? (
+          <CalendarWorkspace
+            accountFilter={accountFilter}
+            accounts={connectedAccounts}
+            scheduleSeed={scheduleSeed}
+            initialEventId={calendarTargetId}
+            onScheduleHandled={handleScheduleHandled}
+            onOpenMenu={() => setMenuOpen(true)}
+            onBack={() => setMobileThreadOpen(false)}
+          />
+        ) : (
+          <>
         <section className="inbox-panel">
           <header className="inbox-header">
             <div className="inbox-title-row">
@@ -1246,6 +1340,12 @@ export function MailShell() {
               </div>
               <div className="thread-actions">
                 <IconButton
+                  label="Schedule"
+                  onClick={() => scheduleThread(selected)}
+                >
+                  <CalendarDays size={17} />
+                </IconButton>
+                <IconButton
                   label="Archive"
                   onClick={() => archiveThread(selected.id)}
                 >
@@ -1359,6 +1459,8 @@ export function MailShell() {
             <MessageCircle size={28} />
             <p>Choose a conversation</p>
           </section>
+        )}
+          </>
         )}
       </section>
 
@@ -1532,8 +1634,42 @@ export function MailShell() {
                       : semanticStatus === "fallback"
                         ? "private intent search · all accounts"
                         : "type to search on-device"}
-                </small>
+                  </small>
               </div>
+              {calendarSearchResults.length ? (
+                <>
+                  <div className="result-label calendar-result-label">
+                    <span>Calendar</span>
+                    <small>private local index</small>
+                  </div>
+                  {calendarSearchResults.map((event) => (
+                    <button
+                      type="button"
+                      className="search-result calendar-search-result"
+                      key={event.id}
+                      onClick={() => {
+                        setCalendarTargetId(event.id);
+                        setActiveView("today");
+                        closeSearch();
+                      }}
+                    >
+                      <span
+                        className="calendar-search-glyph"
+                        style={{ "--calendar-color": event.calendarColor } as CSSProperties}
+                      >
+                        <CalendarDays size={16} />
+                      </span>
+                      <span>
+                        <strong>{event.title}</strong>
+                        <small>
+                          {event.calendarName} · {eventTimeForSearch(event)}
+                        </small>
+                      </span>
+                      <em>{event.provider === "google" ? "Google" : "Outlook"}</em>
+                    </button>
+                  ))}
+                </>
+              ) : null}
               {semanticResults.slice(0, 4).map((thread, index) => (
                 <button
                   type="button"

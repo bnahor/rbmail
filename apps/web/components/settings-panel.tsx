@@ -221,6 +221,16 @@ export function SettingsPanel() {
                         ? `Synced ${new Date(account.lastSyncAt).toLocaleString()}`
                         : "Waiting for first sync"}
                     </small>
+                    {account.capabilities.calendar ? (
+                      <small className="account-capability">Mail + Calendar</small>
+                    ) : (
+                      <a
+                        className="settings-reconnect"
+                        href={`/api/oauth/${account.provider}/start`}
+                      >
+                        Reconnect to enable Calendar
+                      </a>
+                    )}
                   </div>
                   <span className={`account-status ${account.status}`}>
                     {account.status.replace("_", " ")}

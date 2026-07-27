@@ -16,6 +16,9 @@ The repository contains:
 - Gmail OAuth and Gmail History synchronization;
 - Microsoft identity OAuth and Graph delta synchronization;
 - a provider-neutral normalized mail model;
+- a unified Today agenda across writable Google and Outlook calendars;
+- Calendar-backed Google Meet and Microsoft Teams event creation;
+- encrypted event storage with Google sync tokens and Microsoft delta links;
 - a native macOS desktop wrapper and repeatable signing/notarization script.
 
 The UI automatically switches from realistic demo conversations to connected
@@ -40,9 +43,18 @@ server running while OAuth completes.
 - Google: `http://localhost:3000/api/oauth/google/callback`
 - Microsoft: `http://localhost:3000/api/oauth/microsoft/callback`
 
-Google requires the Gmail API and delegated `gmail.modify` and `gmail.send`
-scopes. Microsoft requires delegated `Mail.ReadWrite`, `Mail.Send`, `User.Read`,
-and `offline_access` permissions.
+Google requires the Gmail and Google Calendar APIs with delegated
+`gmail.modify`, `gmail.send`, `calendar.events`, and
+`calendar.calendarlist.readonly` scopes. Microsoft requires delegated
+`Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite`,
+`Calendars.ReadWrite.Shared`, `User.Read`, and `offline_access` permissions.
+Existing connections must reconnect once when calendar scopes are first added.
+Meet and Teams links are created through provider calendar events, so standalone
+meeting API permissions are not requested.
+
+When a Google OAuth project is in testing mode, add each pilot address under
+Google Auth Platform → Audience → Test users. Testing-mode grants that include
+these scopes expire after seven days.
 
 ## macOS app
 
@@ -61,8 +73,8 @@ the hardened runtime, submits to Apple, staples the ticket, and verifies the app
 
 ## Privacy model
 
-Mail content, OAuth refresh tokens, and provider access tokens are encrypted
-before SQLite persistence with AES-256-GCM. A local install creates
+Mail and calendar content, OAuth refresh tokens, and provider access tokens are
+encrypted before SQLite persistence with AES-256-GCM. A local install creates
 `data/master.key` with owner-only permissions. Hosted deployments must set a
 stable `RBMAIL_MASTER_KEY` and mount `RBMAIL_DATA_DIR` on durable storage.
 
@@ -75,6 +87,14 @@ default in the UI.
 The Dockerfile runs the web app and SQLite database as one service. On Railway,
 mount a persistent volume at `/data`, set `RBMAIL_DATA_DIR=/data`, configure the
 OAuth values from `.env.example`, and set `APP_URL` to the public HTTPS domain.
+
+## Verification
+
+```bash
+pnpm test
+pnpm typecheck
+pnpm build
+```
 
 ## License
 

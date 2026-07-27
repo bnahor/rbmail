@@ -3,12 +3,17 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import { accountCapabilities } from "@/lib/mail/calendar-core";
 import type {
+  CalendarEventDetail,
+  CalendarEventSummary,
+  CalendarSource,
   MailAddress,
   NormalizedMessage,
   Provider,
   PublicAccount,
   StoredAccount,
+  StoredCalendarSource,
   StoredToken,
   ThreadDetail,
   ThreadSummary,
@@ -85,10 +90,52 @@ function initialize(database: DatabaseSync) {
       created_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS calendar_sources (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL REFERENCES mail_accounts(id) ON DELETE CASCADE,
+      provider_calendar_id TEXT NOT NULL,
+      details_cipher TEXT NOT NULL,
+      access_role TEXT NOT NULL,
+      is_primary INTEGER NOT NULL DEFAULT 0,
+      selected INTEGER NOT NULL DEFAULT 1,
+      sync_cursor TEXT,
+      window_start TEXT,
+      window_end TEXT,
+      status TEXT NOT NULL DEFAULT 'connected',
+      last_sync_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(account_id, provider_calendar_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS calendar_events (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL REFERENCES calendar_sources(id) ON DELETE CASCADE,
+      account_id TEXT NOT NULL REFERENCES mail_accounts(id) ON DELETE CASCADE,
+      provider_event_id TEXT NOT NULL,
+      payload_cipher TEXT NOT NULL,
+      start_at TEXT NOT NULL,
+      end_at TEXT NOT NULL,
+      all_day INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'confirmed',
+      updated_at INTEGER NOT NULL,
+      UNIQUE(source_id, provider_event_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS calendar_mutations (
+      idempotency_key TEXT PRIMARY KEY,
+      response_cipher TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_threads_latest
       ON mail_threads(last_message_at DESC);
     CREATE INDEX IF NOT EXISTS idx_messages_thread
       ON mail_messages(thread_id, received_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_calendar_events_range
+      ON calendar_events(start_at, end_at);
+    CREATE INDEX IF NOT EXISTS idx_calendar_events_source
+      ON calendar_events(source_id, start_at);
   `);
   try {
     database.exec(
@@ -192,7 +239,12 @@ export function getAccounts(): StoredAccount[] {
 }
 
 export function getPublicAccounts(): PublicAccount[] {
-  return getAccounts().map(({ token: _token, syncCursor: _cursor, ...account }) => account);
+  return getAccounts().map(({ token, syncCursor: _cursor, ...account }) => {
+    return {
+      ...account,
+      capabilities: accountCapabilities(account.provider, token.scope),
+    };
+  });
 }
 
 export function updateAccountToken(id: string, token: StoredToken) {
@@ -263,6 +315,306 @@ export function consumeOauthState(
   database.prepare("DELETE FROM oauth_states WHERE state = ?").run(state);
   if (!row || row.created_at < Date.now() - 10 * 60 * 1000) return null;
   return row.verifier;
+}
+
+type CalendarSourceDetails = {
+  name: string;
+  color: string;
+  timeZone: string;
+};
+
+function calendarSourceRow(
+  row: Record<string, unknown>,
+): StoredCalendarSource {
+  const details = decryptJson<CalendarSourceDetails>(
+    String(row.details_cipher),
+  );
+  return {
+    id: String(row.id),
+    accountId: String(row.account_id),
+    provider: String(row.provider) as Provider,
+    accountEmail: String(row.email),
+    providerCalendarId: String(row.provider_calendar_id),
+    name: details.name,
+    color: details.color,
+    timeZone: details.timeZone,
+    accessRole: String(row.access_role) as CalendarSource["accessRole"],
+    primary: Number(row.is_primary) === 1,
+    selected: Number(row.selected) === 1,
+    syncCursor: row.sync_cursor ? String(row.sync_cursor) : null,
+    windowStart: row.window_start ? String(row.window_start) : null,
+    windowEnd: row.window_end ? String(row.window_end) : null,
+    status: String(row.status) as CalendarSource["status"],
+    lastSyncAt: row.last_sync_at ? Number(row.last_sync_at) : null,
+  };
+}
+
+export function saveCalendarSource(
+  account: StoredAccount,
+  input: {
+    providerCalendarId: string;
+    name: string;
+    color?: string;
+    timeZone?: string;
+    accessRole: CalendarSource["accessRole"];
+    primary?: boolean;
+  },
+): StoredCalendarSource {
+  const database = getDatabase();
+  const existing = database
+    .prepare(
+      "SELECT id FROM calendar_sources WHERE account_id = ? AND provider_calendar_id = ?",
+    )
+    .get(account.id, input.providerCalendarId) as { id: string } | undefined;
+  const id = existing?.id || randomUUID();
+  const now = Date.now();
+  database
+    .prepare(
+      `INSERT INTO calendar_sources (
+        id, account_id, provider_calendar_id, details_cipher, access_role,
+        is_primary, selected, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 1, 'connected', ?, ?)
+      ON CONFLICT(account_id, provider_calendar_id) DO UPDATE SET
+        details_cipher = excluded.details_cipher,
+        access_role = excluded.access_role,
+        is_primary = excluded.is_primary,
+        status = CASE
+          WHEN calendar_sources.status = 'syncing' THEN 'syncing'
+          ELSE 'connected'
+        END,
+        updated_at = excluded.updated_at`,
+    )
+    .run(
+      id,
+      account.id,
+      input.providerCalendarId,
+      encryptJson({
+        name: input.name,
+        color: input.color || (account.provider === "google" ? "#d94b35" : "#5278d8"),
+        timeZone: input.timeZone || "UTC",
+      } satisfies CalendarSourceDetails),
+      input.accessRole,
+      input.primary ? 1 : 0,
+      now,
+      now,
+    );
+  return getCalendarSource(id)!;
+}
+
+export function getCalendarSource(id: string): StoredCalendarSource | null {
+  const row = getDatabase()
+    .prepare(
+      `SELECT c.*, a.provider, a.email
+       FROM calendar_sources c
+       JOIN mail_accounts a ON a.id = c.account_id
+       WHERE c.id = ?`,
+    )
+    .get(id) as Record<string, unknown> | undefined;
+  return row ? calendarSourceRow(row) : null;
+}
+
+export function listCalendarSources(
+  accountId?: string,
+): CalendarSource[] {
+  const rows = getDatabase()
+    .prepare(
+      `SELECT c.*, a.provider, a.email
+       FROM calendar_sources c
+       JOIN mail_accounts a ON a.id = c.account_id
+       WHERE (? IS NULL OR c.account_id = ?)
+       ORDER BY c.is_primary DESC, c.created_at ASC`,
+    )
+    .all(accountId ?? null, accountId ?? null) as Record<string, unknown>[];
+  return rows.map((row) => {
+    const { syncCursor: _cursor, windowStart: _start, windowEnd: _end, ...source } =
+      calendarSourceRow(row);
+    return source;
+  });
+}
+
+export function listStoredCalendarSources(
+  accountId?: string,
+): StoredCalendarSource[] {
+  const rows = getDatabase()
+    .prepare(
+      `SELECT c.*, a.provider, a.email
+       FROM calendar_sources c
+       JOIN mail_accounts a ON a.id = c.account_id
+       WHERE (? IS NULL OR c.account_id = ?)
+       ORDER BY c.is_primary DESC, c.created_at ASC`,
+    )
+    .all(accountId ?? null, accountId ?? null) as Record<string, unknown>[];
+  return rows.map(calendarSourceRow);
+}
+
+export function updateCalendarSourceSync(
+  id: string,
+  input: {
+    cursor?: string | null;
+    windowStart?: string | null;
+    windowEnd?: string | null;
+    status?: CalendarSource["status"];
+    markSynced?: boolean;
+  },
+) {
+  const source = getCalendarSource(id);
+  if (!source) return;
+  getDatabase()
+    .prepare(
+      `UPDATE calendar_sources
+       SET sync_cursor = ?, window_start = ?, window_end = ?, status = ?,
+           last_sync_at = ?, updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(
+      input.cursor === undefined ? source.syncCursor : input.cursor,
+      input.windowStart === undefined ? source.windowStart : input.windowStart,
+      input.windowEnd === undefined ? source.windowEnd : input.windowEnd,
+      input.status ?? source.status,
+      input.markSynced ? Date.now() : source.lastSyncAt,
+      Date.now(),
+      id,
+    );
+}
+
+export function clearCalendarSourceEvents(sourceId: string) {
+  getDatabase()
+    .prepare("DELETE FROM calendar_events WHERE source_id = ?")
+    .run(sourceId);
+}
+
+export function upsertCalendarEvent(event: CalendarEventDetail) {
+  getDatabase()
+    .prepare(
+      `INSERT INTO calendar_events (
+        id, source_id, account_id, provider_event_id, payload_cipher,
+        start_at, end_at, all_day, status, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(source_id, provider_event_id) DO UPDATE SET
+        payload_cipher = excluded.payload_cipher,
+        start_at = excluded.start_at,
+        end_at = excluded.end_at,
+        all_day = excluded.all_day,
+        status = excluded.status,
+        updated_at = excluded.updated_at`,
+    )
+    .run(
+      event.id,
+      event.sourceId,
+      event.accountId,
+      event.providerEventId,
+      encryptJson(event),
+      event.start,
+      event.end,
+      event.allDay ? 1 : 0,
+      event.status,
+      Date.now(),
+    );
+}
+
+export function deleteProviderCalendarEvent(
+  sourceId: string,
+  providerEventId: string,
+) {
+  getDatabase()
+    .prepare(
+      "DELETE FROM calendar_events WHERE source_id = ? AND provider_event_id = ?",
+    )
+    .run(sourceId, providerEventId);
+}
+
+export function deleteCalendarEvent(id: string) {
+  getDatabase().prepare("DELETE FROM calendar_events WHERE id = ?").run(id);
+}
+
+export function getCalendarEvent(id: string): CalendarEventDetail | null {
+  const row = getDatabase()
+    .prepare("SELECT payload_cipher FROM calendar_events WHERE id = ?")
+    .get(id) as { payload_cipher: string } | undefined;
+  return row
+    ? decryptJson<CalendarEventDetail>(row.payload_cipher)
+    : null;
+}
+
+export function listCalendarEvents(input: {
+  from: string;
+  to: string;
+  accountId?: string;
+  sourceId?: string;
+  query?: string;
+}): CalendarEventSummary[] {
+  const rows = getDatabase()
+    .prepare(
+      `SELECT payload_cipher
+       FROM calendar_events
+       WHERE start_at < ? AND end_at > ? AND status != 'cancelled'
+         AND (? IS NULL OR account_id = ?)
+         AND (? IS NULL OR source_id = ?)
+       ORDER BY start_at ASC, end_at ASC`,
+    )
+    .all(
+      input.to,
+      input.from,
+      input.accountId ?? null,
+      input.accountId ?? null,
+      input.sourceId ?? null,
+      input.sourceId ?? null,
+    ) as Array<{ payload_cipher: string }>;
+  const query = input.query?.trim().toLocaleLowerCase();
+  return rows.flatMap((row) => {
+    const detail = decryptJson<CalendarEventDetail>(row.payload_cipher);
+    if (
+      query &&
+      ![
+        detail.title,
+        detail.location,
+        detail.description,
+        detail.organizer.name,
+        detail.organizer.address,
+        ...detail.attendees.flatMap((attendee) => [
+          attendee.name,
+          attendee.address,
+        ]),
+      ]
+        .join("\n")
+        .toLocaleLowerCase()
+        .includes(query)
+    ) {
+      return [];
+    }
+    const {
+      description: _description,
+      organizer: _organizer,
+      attendees: _attendees,
+      recurring: _recurring,
+      htmlLink: _htmlLink,
+      ...summary
+    } = detail;
+    return [summary];
+  });
+}
+
+export function getCalendarMutation<T>(key: string): T | null {
+  const row = getDatabase()
+    .prepare(
+      "SELECT response_cipher FROM calendar_mutations WHERE idempotency_key = ?",
+    )
+    .get(key) as { response_cipher: string } | undefined;
+  return row ? decryptJson<T>(row.response_cipher) : null;
+}
+
+export function saveCalendarMutation(key: string, response: unknown) {
+  const database = getDatabase();
+  database
+    .prepare("DELETE FROM calendar_mutations WHERE created_at < ?")
+    .run(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  database
+    .prepare(
+      `INSERT INTO calendar_mutations (idempotency_key, response_cipher, created_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(idempotency_key) DO NOTHING`,
+    )
+    .run(key, encryptJson(response), Date.now());
 }
 
 export function upsertMessage(account: StoredAccount, message: NormalizedMessage) {

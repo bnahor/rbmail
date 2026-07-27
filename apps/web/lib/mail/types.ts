@@ -43,7 +43,14 @@ export type StoredAccount = {
   lastSyncAt: number | null;
 };
 
-export type PublicAccount = Omit<StoredAccount, "token" | "syncCursor">;
+export type AccountCapabilities = {
+  mail: boolean;
+  calendar: boolean;
+};
+
+export type PublicAccount = Omit<StoredAccount, "token" | "syncCursor"> & {
+  capabilities: AccountCapabilities;
+};
 
 export type ThreadSummary = {
   id: string;
@@ -69,5 +76,93 @@ export type SyncResult = {
   accountId: string;
   processed: number;
   hasMore: boolean;
+  mode: "initial" | "incremental";
+};
+
+export type CalendarAccessRole = "reader" | "writer" | "owner";
+
+export type CalendarSource = {
+  id: string;
+  accountId: string;
+  provider: Provider;
+  accountEmail: string;
+  providerCalendarId: string;
+  name: string;
+  color: string;
+  timeZone: string;
+  accessRole: CalendarAccessRole;
+  primary: boolean;
+  selected: boolean;
+  status: "connected" | "syncing" | "error" | "reauth_required";
+  lastSyncAt: number | null;
+};
+
+export type StoredCalendarSource = CalendarSource & {
+  syncCursor: string | null;
+  windowStart: string | null;
+  windowEnd: string | null;
+};
+
+export type CalendarAttendee = MailAddress & {
+  optional: boolean;
+  responseStatus: "needsAction" | "accepted" | "tentative" | "declined";
+  self?: boolean;
+};
+
+export type CalendarEventSummary = {
+  id: string;
+  sourceId: string;
+  accountId: string;
+  provider: Provider;
+  accountEmail: string;
+  calendarName: string;
+  calendarColor: string;
+  providerEventId: string;
+  title: string;
+  start: string;
+  end: string;
+  allDay: boolean;
+  status: "confirmed" | "tentative" | "cancelled";
+  responseStatus: "needsAction" | "accepted" | "tentative" | "declined";
+  location: string;
+  joinUrl: string | null;
+  conferenceProvider: "meet" | "teams" | null;
+  editable: boolean;
+  etag: string | null;
+};
+
+export type CalendarEventDetail = CalendarEventSummary & {
+  description: string;
+  organizer: MailAddress;
+  attendees: CalendarAttendee[];
+  recurring: boolean;
+  htmlLink: string | null;
+};
+
+export type CreateCalendarEventInput = {
+  sourceId: string;
+  title: string;
+  start: string;
+  end: string;
+  allDay?: boolean;
+  timeZone?: string;
+  attendeeEmails?: string[];
+  description?: string;
+  location?: string;
+  onlineMeeting?: boolean;
+  sourceThreadId?: string;
+};
+
+export type UpdateCalendarEventInput = Partial<
+  Omit<CreateCalendarEventInput, "sourceId" | "sourceThreadId">
+> & {
+  etag?: string | null;
+};
+
+export type EventResponse = "accepted" | "tentative" | "declined";
+
+export type CalendarSyncResult = {
+  sourceId: string;
+  processed: number;
   mode: "initial" | "incremental";
 };

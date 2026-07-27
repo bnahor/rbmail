@@ -1,4 +1,8 @@
 import { isAuthorized, unauthorized } from "@/lib/server/auth";
+import {
+  syncAccountCalendars,
+  syncAllCalendars,
+} from "@/lib/server/calendar";
 import { syncAccount, syncAllAccounts } from "@/lib/server/sync";
 
 export const runtime = "nodejs";
@@ -11,10 +15,15 @@ export async function POST(request: Request) {
     pages?: number;
   };
   try {
-    const results = input.accountId
-      ? await syncAccount(input.accountId, input.pages ?? 1)
-      : await syncAllAccounts(input.pages ?? 1);
-    return Response.json({ results });
+    const [mailResults, calendarResults] = await Promise.all([
+      input.accountId
+        ? syncAccount(input.accountId, input.pages ?? 1)
+        : syncAllAccounts(input.pages ?? 1),
+      input.accountId
+        ? syncAccountCalendars(input.accountId)
+        : syncAllCalendars(),
+    ]);
+    return Response.json({ results: mailResults, calendarResults });
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "Sync failed." },
@@ -29,5 +38,9 @@ export async function GET(request: Request) {
   if (!configured || authorization !== `Bearer ${configured}`) {
     return unauthorized();
   }
-  return Response.json({ results: await syncAllAccounts(1) });
+  const [results, calendarResults] = await Promise.all([
+    syncAllAccounts(1),
+    syncAllCalendars(),
+  ]);
+  return Response.json({ results, calendarResults });
 }
