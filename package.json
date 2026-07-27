@@ -1,0 +1,18 @@
+{
+  "name": "rbmail",
+  "private": true,
+  "packageManager": "pnpm@10.20.0",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "pnpm --filter @rbmail/web dev",
+    "build": "pnpm --filter @rbmail/web build",
+    "typecheck": "pnpm --filter @rbmail/web typecheck",
+    "desktop:build": "bash scripts/build-macos.sh",
+    "desktop:open": "open dist/RBMail.app"
+  }
+}
