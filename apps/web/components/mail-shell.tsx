@@ -250,7 +250,7 @@ const views: Array<{
   count?: number;
 }> = [
   { id: "inbox", label: "Current", icon: Inbox, count: 7 },
-  { id: "reply", label: "Needs attention", icon: MessageCircle, count: 2 },
+  { id: "reply", label: "Needs attention", icon: MessageCircle },
   { id: "receipts", label: "Money", icon: Receipt },
   { id: "travel", label: "Travel", icon: Plane },
   { id: "later", label: "Read later", icon: Bookmark },
@@ -989,7 +989,7 @@ export function MailShell() {
                 >
                   <ViewIcon size={17} />
                   <span>{view.label}</span>
-                  {view.id === "inbox" ? (
+                  {view.id === "inbox" || view.id === "reply" ? (
                     <em>{unreadTotal}</em>
                   ) : view.count ? (
                     <em>{view.count}</em>
