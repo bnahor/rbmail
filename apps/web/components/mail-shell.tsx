@@ -88,6 +88,92 @@ function displayTime(value: string) {
   return date.toLocaleDateString([], { weekday: "short" });
 }
 
+function cleanDisplayText(value: string): string {
+  return value
+    .replace(
+      /&(#(?:x[0-9a-f]+|\d+)|amp|apos|gt|lt|nbsp|quot);/gi,
+      (entity, code: string) => {
+        const namedEntities: Record<string, string> = {
+          amp: "&",
+          apos: "'",
+          gt: ">",
+          lt: "<",
+          nbsp: " ",
+          quot: '"',
+        };
+        if (!code.startsWith("#")) {
+          return namedEntities[code.toLowerCase()] ?? entity;
+        }
+
+        const numericCode = code.slice(1);
+        const hexadecimal = numericCode[0]?.toLowerCase() === "x";
+        const point = Number.parseInt(
+          numericCode.slice(hexadecimal ? 1 : 0),
+          hexadecimal ? 16 : 10,
+        );
+        if (!Number.isFinite(point) || point < 0 || point > 0x10ffff) {
+          return entity;
+        }
+        try {
+          return String.fromCodePoint(point);
+        } catch {
+          return entity;
+        }
+      },
+    )
+    .replace(
+      /[\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g,
+      "",
+    )
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function buildEmailDocument(html: string): string {
+  const safeMarkup = html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(
+      /<(iframe|object|embed|form)\b[^>]*>[\s\S]*?<\/\1>/gi,
+      "",
+    )
+    .replace(/<(?:input|button|textarea|select|meta|base)\b[^>]*>/gi, "")
+    .replace(
+      /\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi,
+      "",
+    );
+  const styles = (
+    safeMarkup.match(/<style\b[^>]*>[\s\S]*?<\/style>/gi) ?? []
+  ).join("\n");
+  const bodyMatch = safeMarkup.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
+  const content = (bodyMatch?.[1] ?? safeMarkup)
+    .replace(/<!doctype[^>]*>/gi, "")
+    .replace(/<\/?(?:html|head|body)\b[^>]*>/gi, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
+
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="color-scheme" content="light">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline' https: http:; font-src data: https: http:; media-src data: https: http:; script-src 'none'; frame-src 'none'; object-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+    <base target="_blank">
+    ${styles}
+    <style>
+      :root { color-scheme: light; }
+      html, body { min-width: 0 !important; max-width: 100% !important; margin: 0 !important; background: #fff !important; color: #252521; }
+      body { overflow-wrap: anywhere; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 1.55; }
+      img { max-width: 100% !important; height: auto !important; }
+      table { max-width: 100% !important; }
+      pre { max-width: 100%; overflow: auto; white-space: pre-wrap; }
+      a { color: #315cce; }
+      .rbmail-email-root { width: 100%; min-width: 0; overflow: hidden; }
+    </style>
+  </head>
+  <body><div class="rbmail-email-root">${content}</div></body>
+</html>`;
+}
+
 function inferTag(thread: ThreadSummary) {
   const text = `${thread.subject} ${thread.snippet} ${thread.labels.join(" ")}`.toLowerCase();
   if (/invoice|receipt|payment|bank|paid/.test(text)) return "Finance";
@@ -111,8 +197,8 @@ function mapSummary(
     id: thread.id,
     sender: senderName,
     initials: initials(senderName),
-    subject: thread.subject,
-    preview: thread.snippet,
+    subject: cleanDisplayText(thread.subject),
+    preview: cleanDisplayText(thread.snippet),
     time: displayTime(thread.lastMessageAt),
     sortTime: new Date(thread.lastMessageAt).getTime(),
     account: slot,
@@ -139,7 +225,8 @@ function mapDetail(thread: ThreadDetail): MailThread["messages"] {
         hour: "numeric",
         minute: "2-digit",
       }),
-      body: message.bodyText || message.snippet,
+      body: cleanDisplayText(message.bodyText || message.snippet),
+      html: message.bodyHtml,
       outgoing,
     };
   });
@@ -179,6 +266,76 @@ function IconButton({
     >
       {children}
     </button>
+  );
+}
+
+function RichMessageBody({
+  html,
+  fallback,
+}: {
+  html?: string | null;
+  fallback: string;
+}) {
+  const frame = useRef<HTMLIFrameElement>(null);
+  const observer = useRef<ResizeObserver | null>(null);
+  const [height, setHeight] = useState(220);
+  const document = useMemo(
+    () => (html ? buildEmailDocument(html) : ""),
+    [html],
+  );
+
+  useEffect(
+    () => () => {
+      observer.current?.disconnect();
+    },
+    [],
+  );
+
+  if (!html) {
+    return (
+      <div className="message-body message-body-plain">
+        {fallback.split("\n").map((line, lineIndex) =>
+          line ? <p key={lineIndex}>{line}</p> : <br key={lineIndex} />,
+        )}
+      </div>
+    );
+  }
+
+  function fitFrame() {
+    const body = frame.current?.contentDocument?.body;
+    if (!body) return;
+    const nextHeight = Math.min(
+      960,
+      Math.max(180, body.scrollHeight, body.offsetHeight),
+    );
+    setHeight(nextHeight);
+    observer.current?.disconnect();
+    observer.current = new ResizeObserver(() => {
+      const nextBody = frame.current?.contentDocument?.body;
+      if (!nextBody) return;
+      setHeight(
+        Math.min(
+          960,
+          Math.max(180, nextBody.scrollHeight, nextBody.offsetHeight),
+        ),
+      );
+    });
+    observer.current.observe(body);
+  }
+
+  return (
+    <div className="message-body message-body-rich">
+      <iframe
+        ref={frame}
+        className="rich-message-frame"
+        srcDoc={document}
+        sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+        referrerPolicy="no-referrer"
+        title="Rich email content"
+        style={{ height }}
+        onLoad={fitFrame}
+      />
+    </div>
   );
 }
 
@@ -956,7 +1113,7 @@ export function MailShell() {
                   <article
                     className={`message-card ${
                       message.outgoing ? "outgoing" : "incoming"
-                    }`}
+                    } ${message.html ? "has-rich-content" : ""}`}
                     key={message.id}
                     style={{ "--message-delay": `${index * 90}ms` } as CSSProperties}
                   >
@@ -973,11 +1130,7 @@ export function MailShell() {
                         <MoreHorizontal size={16} />
                       </IconButton>
                     </header>
-                    <div className="message-body">
-                      {message.body.split("\n").map((line, lineIndex) =>
-                        line ? <p key={lineIndex}>{line}</p> : <br key={lineIndex} />,
-                      )}
-                    </div>
+                    <RichMessageBody html={message.html} fallback={message.body} />
                     {selected.id === "invoice" && index === 0 ? (
                       <button className="attachment-card" type="button">
                         <span>

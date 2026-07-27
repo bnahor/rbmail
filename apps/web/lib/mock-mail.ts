@@ -6,6 +6,7 @@ export type Message = {
   email: string;
   time: string;
   body: string;
+  html?: string | null;
   outgoing?: boolean;
 };
 
