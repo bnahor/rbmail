@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -27,9 +28,12 @@ type DatabaseHolder = {
 const globalDatabase = globalThis as typeof globalThis & DatabaseHolder;
 
 function databasePath() {
-  const directory = path.resolve(
-    process.env.RBMAIL_DATA_DIR ?? path.join(process.cwd(), "data"),
-  );
+  const directory =
+    process.env.NEXT_PHASE === "phase-production-build"
+      ? path.join(tmpdir(), `rbmail-build-${process.pid}`)
+      : path.resolve(
+          process.env.RBMAIL_DATA_DIR ?? path.join(process.cwd(), "data"),
+        );
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   return path.join(directory, "rbmail.sqlite");
 }
