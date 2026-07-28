@@ -1,59 +1,77 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
+
+import { betterAuth } from "better-auth";
 
 import { getMasterKey } from "@/lib/server/crypto";
+import { getDatabase } from "@/lib/server/db";
 
-const COOKIE_NAME = "rbmail_owner";
-
-function configuredPassword() {
-  return process.env.RBMAIL_ACCESS_PASSWORD?.trim() || "";
+function appUrl() {
+  return process.env.APP_URL?.replace(/\/$/, "") || "http://localhost:3000";
 }
 
-function sessionValue() {
-  return createHmac("sha256", getMasterKey())
-    .update(`rbmail-owner:${configuredPassword()}`)
+function authSecret() {
+  const configured = process.env.BETTER_AUTH_SECRET?.trim();
+  if (configured) return configured;
+  return createHash("sha256")
+    .update(getMasterKey())
+    .update("rubidium:better-auth")
     .digest("base64url");
 }
 
-function cookieValue(request: Request): string | null {
-  const cookie = request.headers.get("cookie") || "";
-  const pair = cookie
-    .split(";")
-    .map((entry) => entry.trim())
-    .find((entry) => entry.startsWith(`${COOKIE_NAME}=`));
-  return pair ? decodeURIComponent(pair.slice(COOKIE_NAME.length + 1)) : null;
+export const auth = betterAuth({
+  appName: "Rubidium",
+  baseURL: appUrl(),
+  secret: authSecret(),
+  database: getDatabase(),
+  trustedOrigins: [appUrl()],
+  emailAndPassword: {
+    enabled: true,
+    minPasswordLength: 8,
+    maxPasswordLength: 128,
+  },
+  session: {
+    expiresIn: 60 * 60 * 24 * 30,
+    updateAge: 60 * 60 * 24,
+  },
+  rateLimit: {
+    enabled: true,
+    storage: "database",
+    window: 60,
+    max: 100,
+    customRules: {
+      "/sign-in/email": { window: 60, max: 10 },
+      "/sign-up/email": { window: 60, max: 5 },
+    },
+  },
+});
+
+let migrationPromise: Promise<void> | null = null;
+
+export function ensureAuthSchema() {
+  if (!migrationPromise) {
+    migrationPromise = auth.$context.then(async (context) => {
+      await context.runMigrations();
+    });
+  }
+  return migrationPromise;
 }
 
-export function isAuthorized(request: Request): boolean {
-  const password = configuredPassword();
-  if (!password) return process.env.NODE_ENV !== "production";
-  const candidate = cookieValue(request);
-  if (!candidate) return false;
-  const expected = sessionValue();
-  const left = Buffer.from(candidate);
-  const right = Buffer.from(expected);
-  return left.length === right.length && timingSafeEqual(left, right);
+export async function getAuthSession(request: Request) {
+  await ensureAuthSchema();
+  return auth.api.getSession({ headers: request.headers });
 }
 
-export function verifyPassword(candidate: string): boolean {
-  const expected = configuredPassword();
+export async function requireUser(request: Request) {
+  const session = await getAuthSession(request);
+  return session?.user ?? null;
+}
+
+export function verifyLegacyPasscode(candidate: string): boolean {
+  const expected = process.env.RBMAIL_ACCESS_PASSWORD?.trim() || "";
   if (!expected) return process.env.NODE_ENV !== "production";
   const left = Buffer.from(candidate);
   const right = Buffer.from(expected);
   return left.length === right.length && timingSafeEqual(left, right);
-}
-
-export function ownerCookie() {
-  return {
-    name: COOKIE_NAME,
-    value: sessionValue(),
-    options: {
-      httpOnly: true,
-      sameSite: "lax" as const,
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 30,
-    },
-  };
 }
 
 export function unauthorized() {

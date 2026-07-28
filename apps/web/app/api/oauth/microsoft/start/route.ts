@@ -1,12 +1,13 @@
-import { isAuthorized, unauthorized } from "@/lib/server/auth";
+import { requireUser, unauthorized } from "@/lib/server/auth";
 import { getAuthorizationUrl } from "@/lib/server/oauth";
 
 export const runtime = "nodejs";
 
-export function GET(request: Request) {
-  if (!isAuthorized(request)) return unauthorized();
+export async function GET(request: Request) {
+  const user = await requireUser(request);
+  if (!user) return unauthorized();
   try {
-    return Response.redirect(getAuthorizationUrl("microsoft"));
+    return Response.redirect(getAuthorizationUrl("microsoft", user.id));
   } catch (error) {
     return Response.json(
       {

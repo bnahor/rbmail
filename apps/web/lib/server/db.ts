@@ -42,6 +42,7 @@ function initialize(database: DatabaseSync) {
 
     CREATE TABLE IF NOT EXISTS mail_accounts (
       id TEXT PRIMARY KEY,
+      user_id TEXT,
       provider TEXT NOT NULL,
       provider_account_id TEXT NOT NULL,
       email TEXT NOT NULL,
@@ -85,6 +86,7 @@ function initialize(database: DatabaseSync) {
 
     CREATE TABLE IF NOT EXISTS oauth_states (
       state TEXT PRIMARY KEY,
+      user_id TEXT,
       provider TEXT NOT NULL,
       verifier TEXT NOT NULL,
       created_at INTEGER NOT NULL
@@ -144,6 +146,20 @@ function initialize(database: DatabaseSync) {
   } catch {
     // The column already exists.
   }
+  for (const statement of [
+    "ALTER TABLE mail_accounts ADD COLUMN user_id TEXT",
+    "ALTER TABLE oauth_states ADD COLUMN user_id TEXT",
+  ]) {
+    try {
+      database.exec(statement);
+    } catch {
+      // The column already exists.
+    }
+  }
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_mail_accounts_user
+      ON mail_accounts(user_id, created_at);
+  `);
 }
 
 export function getDatabase(): DatabaseSync {
@@ -158,6 +174,7 @@ export function getDatabase(): DatabaseSync {
 function rowToStoredAccount(row: Record<string, unknown>): StoredAccount {
   return {
     id: String(row.id),
+    userId: row.user_id ? String(row.user_id) : null,
     provider: String(row.provider) as Provider,
     providerAccountId: String(row.provider_account_id),
     email: String(row.email),
@@ -170,6 +187,7 @@ function rowToStoredAccount(row: Record<string, unknown>): StoredAccount {
 }
 
 export function saveAccount(input: {
+  userId: string;
   provider: Provider;
   providerAccountId: string;
   email: string;
@@ -187,6 +205,9 @@ export function saveAccount(input: {
     | undefined;
 
   const now = Date.now();
+  if (existing?.user_id && String(existing.user_id) !== input.userId) {
+    throw new Error("This mailbox is already connected to another Rubidium user.");
+  }
   const id = existing ? String(existing.id) : randomUUID();
   const previousToken = existing
     ? decryptJson<StoredToken>(String(existing.token_cipher))
@@ -200,10 +221,11 @@ export function saveAccount(input: {
   database
     .prepare(
       `INSERT INTO mail_accounts (
-        id, provider, provider_account_id, email, display_name, token_cipher,
+        id, user_id, provider, provider_account_id, email, display_name, token_cipher,
         status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'connected', ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'connected', ?, ?)
       ON CONFLICT(provider, provider_account_id) DO UPDATE SET
+        user_id = excluded.user_id,
         email = excluded.email,
         display_name = excluded.display_name,
         token_cipher = excluded.token_cipher,
@@ -212,6 +234,7 @@ export function saveAccount(input: {
     )
     .run(
       id,
+      input.userId,
       input.provider,
       input.providerAccountId,
       input.email,
@@ -224,27 +247,38 @@ export function saveAccount(input: {
   return getAccount(id)!;
 }
 
-export function getAccount(id: string): StoredAccount | null {
+export function getAccount(id: string, userId?: string): StoredAccount | null {
   const row = getDatabase()
-    .prepare("SELECT * FROM mail_accounts WHERE id = ?")
-    .get(id) as Record<string, unknown> | undefined;
+    .prepare(
+      `SELECT * FROM mail_accounts
+       WHERE id = ? AND (? IS NULL OR user_id = ?)`,
+    )
+    .get(id, userId ?? null, userId ?? null) as
+    | Record<string, unknown>
+    | undefined;
   return row ? rowToStoredAccount(row) : null;
 }
 
-export function getAccounts(): StoredAccount[] {
+export function getAccounts(userId?: string): StoredAccount[] {
   const rows = getDatabase()
-    .prepare("SELECT * FROM mail_accounts ORDER BY created_at ASC")
-    .all() as Record<string, unknown>[];
+    .prepare(
+      `SELECT * FROM mail_accounts
+       WHERE (? IS NULL OR user_id = ?)
+       ORDER BY created_at ASC`,
+    )
+    .all(userId ?? null, userId ?? null) as Record<string, unknown>[];
   return rows.map(rowToStoredAccount);
 }
 
-export function getPublicAccounts(): PublicAccount[] {
-  return getAccounts().map(({ token, syncCursor: _cursor, ...account }) => {
-    return {
-      ...account,
-      capabilities: accountCapabilities(account.provider, token.scope),
-    };
-  });
+export function getPublicAccounts(userId: string): PublicAccount[] {
+  return getAccounts(userId).map(
+    ({ token, syncCursor: _cursor, userId: _userId, ...account }) => {
+      return {
+        ...account,
+        capabilities: accountCapabilities(account.provider, token.scope),
+      };
+    },
+  );
 }
 
 export function updateAccountToken(id: string, token: StoredToken) {
@@ -280,12 +314,15 @@ export function updateAccountSync(
     );
 }
 
-export function deleteAccount(id: string) {
-  getDatabase().prepare("DELETE FROM mail_accounts WHERE id = ?").run(id);
+export function deleteAccount(id: string, userId: string) {
+  getDatabase()
+    .prepare("DELETE FROM mail_accounts WHERE id = ? AND user_id = ?")
+    .run(id, userId);
 }
 
 export function saveOauthState(
   state: string,
+  userId: string,
   provider: Provider,
   verifier: string,
 ) {
@@ -295,26 +332,48 @@ export function saveOauthState(
     .run(Date.now() - 10 * 60 * 1000);
   database
     .prepare(
-      "INSERT INTO oauth_states (state, provider, verifier, created_at) VALUES (?, ?, ?, ?)",
+      "INSERT INTO oauth_states (state, user_id, provider, verifier, created_at) VALUES (?, ?, ?, ?, ?)",
     )
-    .run(state, provider, verifier, Date.now());
+    .run(state, userId, provider, verifier, Date.now());
 }
 
 export function consumeOauthState(
   state: string,
   provider: Provider,
-): string | null {
+): { verifier: string; userId: string } | null {
   const database = getDatabase();
   const row = database
     .prepare(
-      "SELECT verifier, created_at FROM oauth_states WHERE state = ? AND provider = ?",
+      "SELECT verifier, user_id, created_at FROM oauth_states WHERE state = ? AND provider = ?",
     )
     .get(state, provider) as
-    | { verifier: string; created_at: number }
+    | { verifier: string; user_id: string | null; created_at: number }
     | undefined;
   database.prepare("DELETE FROM oauth_states WHERE state = ?").run(state);
-  if (!row || row.created_at < Date.now() - 10 * 60 * 1000) return null;
-  return row.verifier;
+  if (
+    !row ||
+    !row.user_id ||
+    row.created_at < Date.now() - 10 * 60 * 1000
+  ) {
+    return null;
+  }
+  return { verifier: row.verifier, userId: row.user_id };
+}
+
+export function countUnownedAccounts(): number {
+  const row = getDatabase()
+    .prepare("SELECT COUNT(*) AS count FROM mail_accounts WHERE user_id IS NULL")
+    .get() as { count: number };
+  return Number(row.count);
+}
+
+export function claimUnownedAccounts(userId: string): number {
+  const result = getDatabase()
+    .prepare(
+      "UPDATE mail_accounts SET user_id = ?, updated_at = ? WHERE user_id IS NULL",
+    )
+    .run(userId, Date.now());
+  return Number(result.changes);
 }
 
 type CalendarSourceDetails = {
@@ -401,19 +460,25 @@ export function saveCalendarSource(
   return getCalendarSource(id)!;
 }
 
-export function getCalendarSource(id: string): StoredCalendarSource | null {
+export function getCalendarSource(
+  id: string,
+  userId?: string,
+): StoredCalendarSource | null {
   const row = getDatabase()
     .prepare(
       `SELECT c.*, a.provider, a.email
        FROM calendar_sources c
        JOIN mail_accounts a ON a.id = c.account_id
-       WHERE c.id = ?`,
+       WHERE c.id = ? AND (? IS NULL OR a.user_id = ?)`,
     )
-    .get(id) as Record<string, unknown> | undefined;
+    .get(id, userId ?? null, userId ?? null) as
+    | Record<string, unknown>
+    | undefined;
   return row ? calendarSourceRow(row) : null;
 }
 
 export function listCalendarSources(
+  userId: string,
   accountId?: string,
 ): CalendarSource[] {
   const rows = getDatabase()
@@ -421,10 +486,14 @@ export function listCalendarSources(
       `SELECT c.*, a.provider, a.email
        FROM calendar_sources c
        JOIN mail_accounts a ON a.id = c.account_id
-       WHERE (? IS NULL OR c.account_id = ?)
+       WHERE a.user_id = ?
+         AND (? IS NULL OR c.account_id = ?)
        ORDER BY c.is_primary DESC, c.created_at ASC`,
     )
-    .all(accountId ?? null, accountId ?? null) as Record<string, unknown>[];
+    .all(userId, accountId ?? null, accountId ?? null) as Record<
+    string,
+    unknown
+  >[];
   return rows.map((row) => {
     const { syncCursor: _cursor, windowStart: _start, windowEnd: _end, ...source } =
       calendarSourceRow(row);
@@ -527,16 +596,27 @@ export function deleteCalendarEvent(id: string) {
   getDatabase().prepare("DELETE FROM calendar_events WHERE id = ?").run(id);
 }
 
-export function getCalendarEvent(id: string): CalendarEventDetail | null {
+export function getCalendarEvent(
+  id: string,
+  userId?: string,
+): CalendarEventDetail | null {
   const row = getDatabase()
-    .prepare("SELECT payload_cipher FROM calendar_events WHERE id = ?")
-    .get(id) as { payload_cipher: string } | undefined;
+    .prepare(
+      `SELECT e.payload_cipher
+       FROM calendar_events e
+       JOIN mail_accounts a ON a.id = e.account_id
+       WHERE e.id = ? AND (? IS NULL OR a.user_id = ?)`,
+    )
+    .get(id, userId ?? null, userId ?? null) as
+    | { payload_cipher: string }
+    | undefined;
   return row
     ? decryptJson<CalendarEventDetail>(row.payload_cipher)
     : null;
 }
 
 export function listCalendarEvents(input: {
+  userId: string;
   from: string;
   to: string;
   accountId?: string;
@@ -545,14 +625,17 @@ export function listCalendarEvents(input: {
 }): CalendarEventSummary[] {
   const rows = getDatabase()
     .prepare(
-      `SELECT payload_cipher
-       FROM calendar_events
-       WHERE start_at < ? AND end_at > ? AND status != 'cancelled'
-         AND (? IS NULL OR account_id = ?)
-         AND (? IS NULL OR source_id = ?)
-       ORDER BY start_at ASC, end_at ASC`,
+      `SELECT e.payload_cipher
+       FROM calendar_events e
+       JOIN mail_accounts a ON a.id = e.account_id
+       WHERE a.user_id = ?
+         AND e.start_at < ? AND e.end_at > ? AND e.status != 'cancelled'
+         AND (? IS NULL OR e.account_id = ?)
+         AND (? IS NULL OR e.source_id = ?)
+       ORDER BY e.start_at ASC, e.end_at ASC`,
     )
     .all(
+      input.userId,
       input.to,
       input.from,
       input.accountId ?? null,
@@ -753,31 +836,33 @@ function threadRowToSummary(row: Record<string, unknown>): ThreadSummary {
   };
 }
 
-export function listThreads(limit = 100): ThreadSummary[] {
+export function listThreads(userId: string, limit = 100): ThreadSummary[] {
   const rows = getDatabase()
     .prepare(
       `SELECT t.*, a.provider, a.email, a.display_name,
         (SELECT COUNT(*) FROM mail_messages m WHERE m.thread_id = t.id) AS message_count
        FROM mail_threads t
        JOIN mail_accounts a ON a.id = t.account_id
-       WHERE t.archived = 0
+       WHERE a.user_id = ? AND t.archived = 0
        ORDER BY t.last_message_at DESC
        LIMIT ?`,
     )
-    .all(Math.max(1, Math.min(limit, 500))) as Record<string, unknown>[];
+    .all(userId, Math.max(1, Math.min(limit, 500))) as Record<string, unknown>[];
   return rows.map(threadRowToSummary);
 }
 
-export function getThread(id: string): ThreadDetail | null {
+export function getThread(id: string, userId?: string): ThreadDetail | null {
   const row = getDatabase()
     .prepare(
       `SELECT t.*, a.provider, a.email, a.display_name,
         (SELECT COUNT(*) FROM mail_messages m WHERE m.thread_id = t.id) AS message_count
        FROM mail_threads t
        JOIN mail_accounts a ON a.id = t.account_id
-       WHERE t.id = ?`,
+       WHERE t.id = ? AND (? IS NULL OR a.user_id = ?)`,
     )
-    .get(id) as Record<string, unknown> | undefined;
+    .get(id, userId ?? null, userId ?? null) as
+    | Record<string, unknown>
+    | undefined;
   if (!row) return null;
 
   const messages = getDatabase()

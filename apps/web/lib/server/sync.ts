@@ -23,9 +23,9 @@ export async function syncAccount(
   return results;
 }
 
-export async function syncAllAccounts(pagesPerAccount = 1) {
+export async function syncAllAccounts(pagesPerAccount = 1, userId?: string) {
   const results: SyncResult[] = [];
-  for (const account of getAccounts()) {
+  for (const account of getAccounts(userId)) {
     try {
       results.push(...(await syncAccount(account.id, pagesPerAccount)));
     } catch {

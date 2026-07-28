@@ -13,6 +13,7 @@ The repository contains:
 
 - a responsive Next.js mail client with desktop and mobile interaction patterns;
 - encrypted local SQLite storage;
+- multi-user email/password accounts with tenant-isolated mail and calendars;
 - Gmail OAuth and Gmail History synchronization;
 - Microsoft identity OAuth and Graph delta synchronization;
 - a provider-neutral normalized mail model;
@@ -37,6 +38,13 @@ pnpm dev
 
 Open `http://localhost:3000/settings`, connect an account, and keep the local
 server running while OAuth completes.
+
+Rubidium uses self-hosted Better Auth accounts for the app login. Each new user
+gets an empty, isolated workspace and then links their own Gmail and Outlook
+mailboxes. Set `BETTER_AUTH_SECRET` to at least 32 high-entropy characters in
+production. `RBMAIL_ACCESS_PASSWORD` is only a one-time migration code: after
+the first existing owner creates an account, they can use it to claim mail that
+was synced by the older single-owner release.
 
 ### OAuth callbacks
 
@@ -86,7 +94,8 @@ default in the UI.
 
 The Dockerfile runs the web app and SQLite database as one service. On Railway,
 mount a persistent volume at `/data`, set `RBMAIL_DATA_DIR=/data`, configure the
-OAuth values from `.env.example`, and set `APP_URL` to the public HTTPS domain.
+OAuth values from `.env.example`, set `APP_URL` to the public HTTPS domain, and
+set a stable `BETTER_AUTH_SECRET`.
 
 ## Verification
 

@@ -1,27 +1,32 @@
-import { isAuthorized, unauthorized } from "@/lib/server/auth";
+import { requireUser, unauthorized } from "@/lib/server/auth";
 import {
   syncAccountCalendars,
   syncAllCalendars,
 } from "@/lib/server/calendar";
 import { syncAccount, syncAllAccounts } from "@/lib/server/sync";
+import { getAccount } from "@/lib/server/db";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 export async function POST(request: Request) {
-  if (!isAuthorized(request)) return unauthorized();
+  const user = await requireUser(request);
+  if (!user) return unauthorized();
   const input = (await request.json().catch(() => ({}))) as {
     accountId?: string;
     pages?: number;
   };
+  if (input.accountId && !getAccount(input.accountId, user.id)) {
+    return Response.json({ error: "Account not found." }, { status: 404 });
+  }
   try {
     const [mailResults, calendarResults] = await Promise.all([
       input.accountId
         ? syncAccount(input.accountId, input.pages ?? 1)
-        : syncAllAccounts(input.pages ?? 1),
+        : syncAllAccounts(input.pages ?? 1, user.id),
       input.accountId
         ? syncAccountCalendars(input.accountId)
-        : syncAllCalendars(),
+        : syncAllCalendars(user.id),
     ]);
     return Response.json({ results: mailResults, calendarResults });
   } catch (error) {

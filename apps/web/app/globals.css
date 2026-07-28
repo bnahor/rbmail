@@ -2421,6 +2421,12 @@ textarea:focus-visible {
   margin-bottom: 32px;
 }
 
+.settings-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .settings-header h1,
 .unlock-card h1 {
   margin: 2px 0 4px;
@@ -2719,6 +2725,15 @@ textarea:focus-visible {
   font-weight: 750;
 }
 
+.unlock-card label + label {
+  margin-top: 0;
+}
+
+.unlock-card label small {
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+
 .unlock-card label > span {
   display: flex;
   align-items: center;
@@ -2739,6 +2754,87 @@ textarea:focus-visible {
 
 .unlock-card .settings-primary {
   width: 100%;
+}
+
+.auth-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  margin-top: 22px;
+  border-radius: 12px;
+  background: rgba(42, 40, 35, 0.06);
+  padding: 3px;
+}
+
+.auth-switch button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.auth-switch button.active {
+  background: white;
+  color: var(--ink);
+  box-shadow: 0 2px 10px rgba(36, 32, 24, 0.08);
+}
+
+.auth-note {
+  display: block;
+  margin-top: 13px;
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.migration-card {
+  display: grid;
+  grid-template-columns: 1fr minmax(150px, 210px) auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(178, 75, 59, 0.2);
+  border-radius: 14px;
+  background: rgba(255, 244, 238, 0.88);
+  padding: 14px;
+}
+
+.migration-card > div,
+.migration-card > div > span {
+  display: flex;
+  min-width: 0;
+}
+
+.migration-card > div {
+  align-items: center;
+  gap: 10px;
+}
+
+.migration-card > div > span {
+  flex-direction: column;
+}
+
+.migration-card strong {
+  font-size: 11px;
+}
+
+.migration-card small {
+  color: var(--ink-soft);
+  font-size: 9px;
+}
+
+.migration-card input {
+  height: 40px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: white;
+  padding: 0 11px;
+  outline: none;
 }
 
 .settings-logo {
@@ -2899,12 +2995,20 @@ textarea:focus-visible {
     grid-template-columns: 1fr auto;
   }
 
-  .settings-header > div {
+  .settings-header > div:not(.settings-header-actions) {
     grid-column: 1 / -1;
     grid-row: 2;
   }
 
+  .settings-header-actions {
+    justify-content: flex-end;
+  }
+
   .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .migration-card {
     grid-template-columns: 1fr;
   }
 

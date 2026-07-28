@@ -1,10 +1,12 @@
-import { isAuthorized, unauthorized } from "@/lib/server/auth";
+import { requireUser, unauthorized } from "@/lib/server/auth";
+import { getAccount } from "@/lib/server/db";
 import { sendMessage } from "@/lib/server/mail-actions";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  if (!isAuthorized(request)) return unauthorized();
+  const user = await requireUser(request);
+  if (!user) return unauthorized();
   const input = (await request.json()) as {
     accountId?: string;
     to?: string;
@@ -16,6 +18,9 @@ export async function POST(request: Request) {
       { error: "Account, recipient, subject, and message are required." },
       { status: 400 },
     );
+  }
+  if (!getAccount(input.accountId, user.id)) {
+    return Response.json({ error: "Account not found." }, { status: 404 });
   }
   try {
     await sendMessage(input.accountId, {

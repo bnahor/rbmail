@@ -33,6 +33,7 @@ export type StoredToken = {
 
 export type StoredAccount = {
   id: string;
+  userId: string | null;
   provider: Provider;
   providerAccountId: string;
   email: string;
@@ -48,7 +49,10 @@ export type AccountCapabilities = {
   calendar: boolean;
 };
 
-export type PublicAccount = Omit<StoredAccount, "token" | "syncCursor"> & {
+export type PublicAccount = Omit<
+  StoredAccount,
+  "token" | "syncCursor" | "userId"
+> & {
   capabilities: AccountCapabilities;
 };
 

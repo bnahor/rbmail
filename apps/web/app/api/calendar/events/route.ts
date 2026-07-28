@@ -1,19 +1,21 @@
 import { randomUUID } from "node:crypto";
 
 import type { CreateCalendarEventInput } from "@/lib/mail/types";
-import { isAuthorized, unauthorized } from "@/lib/server/auth";
+import { requireUser, unauthorized } from "@/lib/server/auth";
 import { calendarError, validDate } from "@/lib/server/calendar-api";
 import { createCalendarEvent } from "@/lib/server/calendar";
 import {
   getCalendarMutation,
+  getCalendarSource,
   listCalendarEvents,
   saveCalendarMutation,
 } from "@/lib/server/db";
 
 export const runtime = "nodejs";
 
-export function GET(request: Request) {
-  if (!isAuthorized(request)) return unauthorized();
+export async function GET(request: Request) {
+  const user = await requireUser(request);
+  if (!user) return unauthorized();
   const url = new URL(request.url);
   const now = new Date();
   const later = new Date(now);
@@ -25,6 +27,7 @@ export function GET(request: Request) {
   }
   return Response.json({
     events: listCalendarEvents({
+      userId: user.id,
       from,
       to,
       accountId: url.searchParams.get("accountId") || undefined,
@@ -35,7 +38,8 @@ export function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  if (!isAuthorized(request)) return unauthorized();
+  const user = await requireUser(request);
+  if (!user) return unauthorized();
   const input = (await request.json().catch(() => ({}))) as Partial<CreateCalendarEventInput>;
   if (
     !input.sourceId ||
@@ -49,9 +53,12 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+  if (!getCalendarSource(input.sourceId, user.id)) {
+    return Response.json({ error: "Calendar not found." }, { status: 404 });
+  }
   const idempotencyKey =
     request.headers.get("idempotency-key")?.trim() || randomUUID();
-  const mutationKey = `create:${idempotencyKey}`;
+  const mutationKey = `${user.id}:create:${idempotencyKey}`;
   const previous = getCalendarMutation<unknown>(mutationKey);
   if (previous) return Response.json(previous);
   try {

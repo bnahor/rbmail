@@ -16,6 +16,7 @@ import { useSearchParams } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import type { PublicAccount } from "@/lib/mail/types";
+import { authClient } from "@/lib/auth-client";
 
 type AppConfig = {
   providers: { google: boolean; microsoft: boolean };
@@ -25,7 +26,13 @@ type AppConfig = {
 export function SettingsPanel() {
   const params = useSearchParams();
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+  const [user, setUser] = useState<{ name: string; email: string } | null>(null);
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [migrationPasscode, setMigrationPasscode] = useState("");
+  const [unownedAccounts, setUnownedAccounts] = useState(0);
   const [accounts, setAccounts] = useState<PublicAccount[]>([]);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -34,37 +41,92 @@ export function SettingsPanel() {
   const load = useCallback(async () => {
     const session = await fetch("/api/session").then((response) => response.json());
     setAuthenticated(Boolean(session.authenticated));
+    setUser(session.user || null);
     if (!session.authenticated) return;
-    const [accountResponse, configResponse] = await Promise.all([
+    const [accountResponse, configResponse, claimResponse] = await Promise.all([
       fetch("/api/accounts"),
       fetch("/api/config"),
+      fetch("/api/bootstrap/claim"),
     ]);
     if (!accountResponse.ok || !configResponse.ok) return;
     const accountPayload = await accountResponse.json();
     setAccounts(accountPayload.accounts);
     setConfig(await configResponse.json());
+    if (claimResponse.ok) {
+      const claimPayload = await claimResponse.json();
+      setUnownedAccounts(Number(claimPayload.unownedAccounts || 0));
+    }
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  async function unlock(event: FormEvent) {
+  async function authenticate(event: FormEvent) {
     event.preventDefault();
-    setBusy("unlock");
+    setBusy("auth");
     setError("");
-    const response = await fetch("/api/session", {
+    const result =
+      authMode === "signup"
+        ? await authClient.signUp.email({
+            name: name.trim(),
+            email: email.trim(),
+            password,
+          })
+        : await authClient.signIn.email({
+            email: email.trim(),
+            password,
+          });
+    if (result.error) {
+      setBusy(null);
+      setError(result.error.message || "Authentication failed.");
+      return;
+    }
+    if (authMode === "signup" && migrationPasscode) {
+      const claimResponse = await fetch("/api/bootstrap/claim", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ passcode: migrationPasscode }),
+      });
+      if (!claimResponse.ok) {
+        const payload = await claimResponse.json();
+        setError(
+          payload.error ||
+            "Your account was created, but existing mail was not migrated.",
+        );
+      }
+    }
+    setBusy(null);
+    await load();
+  }
+
+  async function claimExistingMail(event: FormEvent) {
+    event.preventDefault();
+    setBusy("claim");
+    setError("");
+    const response = await fetch("/api/bootstrap/claim", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ passcode: migrationPasscode }),
     });
     setBusy(null);
     if (!response.ok) {
       const payload = await response.json();
-      setError(payload.error || "Could not unlock rbmail.");
+      setError(payload.error || "Could not migrate existing mail.");
       return;
     }
+    setMigrationPasscode("");
     await load();
+  }
+
+  async function signOut() {
+    setBusy("signout");
+    await authClient.signOut();
+    setBusy(null);
+    setAccounts([]);
+    setConfig(null);
+    setUser(null);
+    setAuthenticated(false);
   }
 
   async function sync(accountId?: string) {
@@ -105,28 +167,100 @@ export function SettingsPanel() {
   if (!authenticated) {
     return (
       <main className="settings-stage">
-        <form className="unlock-card" onSubmit={unlock}>
+        <form className="unlock-card" onSubmit={authenticate}>
           <span className="settings-logo">rb</span>
-          <p className="settings-eyebrow">Private by default</p>
-          <h1>Unlock your mail</h1>
-          <p>Your owner password protects this self-hosted instance.</p>
+          <p className="settings-eyebrow">One identity · every inbox</p>
+          <h1>{authMode === "signup" ? "Create your account" : "Welcome back"}</h1>
+          <p>
+            {authMode === "signup"
+              ? "Your Rubidium account keeps your mailboxes private from every other user."
+              : "Sign in to your private mail workspace."}
+          </p>
+          <div className="auth-switch" role="tablist" aria-label="Authentication">
+            <button
+              type="button"
+              className={authMode === "signin" ? "active" : ""}
+              onClick={() => setAuthMode("signin")}
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              className={authMode === "signup" ? "active" : ""}
+              onClick={() => setAuthMode("signup")}
+            >
+              Create account
+            </button>
+          </div>
+          {authMode === "signup" ? (
+            <label>
+              Name
+              <span>
+                <input
+                  autoFocus
+                  autoComplete="name"
+                  required
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </span>
+            </label>
+          ) : null}
           <label>
-            Access password
+            Email
+            <span>
+              <Mail size={17} />
+              <input
+                autoFocus={authMode === "signin"}
+                type="email"
+                autoComplete="email"
+                required
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+              />
+            </span>
+          </label>
+          <label>
+            Password
             <span>
               <LockKeyhole size={17} />
               <input
-                autoFocus
                 type="password"
+                autoComplete={
+                  authMode === "signup" ? "new-password" : "current-password"
+                }
+                minLength={8}
+                required
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
               />
             </span>
           </label>
+          {authMode === "signup" ? (
+            <label>
+              Existing-owner passcode <small>optional</small>
+              <span>
+                <ShieldCheck size={17} />
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  value={migrationPasscode}
+                  onChange={(event) => setMigrationPasscode(event.target.value)}
+                  placeholder="Only needed to claim existing mail"
+                />
+              </span>
+            </label>
+          ) : null}
           {error ? <div className="settings-error">{error}</div> : null}
-          <button className="settings-primary" disabled={busy === "unlock"}>
-            {busy === "unlock" ? <LoaderCircle className="spin" size={17} /> : null}
-            Unlock
+          <button className="settings-primary" disabled={busy === "auth"}>
+            {busy === "auth" ? <LoaderCircle className="spin" size={17} /> : null}
+            {authMode === "signup" ? "Create private workspace" : "Sign in"}
           </button>
+          <small className="auth-note">
+            New users start with an empty workspace, then connect their own Gmail
+            or Outlook accounts.
+          </small>
         </form>
       </main>
     );
@@ -145,17 +279,27 @@ export function SettingsPanel() {
           <div>
             <p className="settings-eyebrow">rbmail control room</p>
             <h1>Accounts</h1>
-            <p>Every mailbox, one conversation-first inbox.</p>
+            <p>{user?.email} · every mailbox, one conversation-first inbox.</p>
           </div>
-          <button
-            className="settings-sync-all"
-            type="button"
-            onClick={() => void sync()}
-            disabled={Boolean(busy) || accounts.length === 0}
-          >
-            <RefreshCw className={busy === "all" ? "spin" : ""} size={16} />
-            Sync all
-          </button>
+          <div className="settings-header-actions">
+            <button
+              className="settings-sync-all"
+              type="button"
+              onClick={() => void sync()}
+              disabled={Boolean(busy) || accounts.length === 0}
+            >
+              <RefreshCw className={busy === "all" ? "spin" : ""} size={16} />
+              Sync all
+            </button>
+            <button
+              className="settings-back"
+              type="button"
+              onClick={() => void signOut()}
+              disabled={busy === "signout"}
+            >
+              Sign out
+            </button>
+          </div>
         </header>
 
         {connected ? (
@@ -165,6 +309,32 @@ export function SettingsPanel() {
           </div>
         ) : null}
         {error ? <div className="settings-error">{error}</div> : null}
+        {unownedAccounts > 0 ? (
+          <form className="migration-card" onSubmit={claimExistingMail}>
+            <div>
+              <ShieldCheck size={20} />
+              <span>
+                <strong>Claim the existing owner workspace</strong>
+                <small>
+                  {unownedAccounts} pre-migration mailbox
+                  {unownedAccounts === 1 ? "" : "es"} can be assigned to this user.
+                </small>
+              </span>
+            </div>
+            <input
+              aria-label="Existing owner passcode"
+              type="password"
+              inputMode="numeric"
+              required
+              value={migrationPasscode}
+              onChange={(event) => setMigrationPasscode(event.target.value)}
+              placeholder="Existing passcode"
+            />
+            <button className="settings-primary" disabled={busy === "claim"}>
+              Claim mail
+            </button>
+          </form>
+        ) : null}
 
         <div className="settings-grid">
           <section className="settings-card">
@@ -268,7 +438,7 @@ export function SettingsPanel() {
         <footer className="settings-privacy">
           <Cloud size={16} />
           <span>
-            Self-hosted data plane · no advertising profile · no cross-account data leaves your instance
+            Self-hosted data plane · private user workspaces · encrypted provider tokens and content
           </span>
         </footer>
       </section>

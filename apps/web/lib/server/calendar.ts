@@ -585,9 +585,9 @@ export async function syncAccountCalendars(accountId: string) {
   return results;
 }
 
-export async function syncAllCalendars() {
+export async function syncAllCalendars(userId?: string) {
   const results: CalendarSyncResult[] = [];
-  for (const account of getAccounts()) {
+  for (const account of getAccounts(userId)) {
     if (!hasCalendarScope(account)) continue;
     results.push(...(await syncAccountCalendars(account.id)));
   }

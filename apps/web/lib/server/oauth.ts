@@ -30,10 +30,10 @@ function verifierAndChallenge() {
   return { verifier, challenge };
 }
 
-export function getAuthorizationUrl(provider: Provider): string {
+export function getAuthorizationUrl(provider: Provider, userId: string): string {
   const state = randomBytes(32).toString("base64url");
   const { verifier, challenge } = verifierAndChallenge();
-  saveOauthState(state, provider, verifier);
+  saveOauthState(state, userId, provider, verifier);
 
   if (provider === "google") {
     const params = new URLSearchParams({
@@ -97,15 +97,15 @@ function normalizeToken(payload: Record<string, unknown>): StoredToken {
 }
 
 export async function completeGoogleOauth(code: string, state: string) {
-  const verifier = consumeOauthState(state, "google");
-  if (!verifier) throw new Error("Google OAuth state is invalid or expired.");
+  const oauthState = consumeOauthState(state, "google");
+  if (!oauthState) throw new Error("Google OAuth state is invalid or expired.");
   const payload = await tokenRequest("https://oauth2.googleapis.com/token", {
     client_id: required("GOOGLE_CLIENT_ID"),
     client_secret: required("GOOGLE_CLIENT_SECRET"),
     redirect_uri: `${appUrl()}/api/oauth/google/callback`,
     grant_type: "authorization_code",
     code,
-    code_verifier: verifier,
+    code_verifier: oauthState.verifier,
   });
   const token = normalizeToken(payload);
   const profileResponse = await fetch(
@@ -122,6 +122,7 @@ export async function completeGoogleOauth(code: string, state: string) {
     emailAddress: string;
   };
   return saveAccount({
+    userId: oauthState.userId,
     provider: "google",
     providerAccountId: profile.emailAddress.toLowerCase(),
     email: profile.emailAddress,
@@ -131,8 +132,8 @@ export async function completeGoogleOauth(code: string, state: string) {
 }
 
 export async function completeMicrosoftOauth(code: string, state: string) {
-  const verifier = consumeOauthState(state, "microsoft");
-  if (!verifier) throw new Error("Microsoft OAuth state is invalid or expired.");
+  const oauthState = consumeOauthState(state, "microsoft");
+  if (!oauthState) throw new Error("Microsoft OAuth state is invalid or expired.");
   const tenant = process.env.MICROSOFT_TENANT?.trim() || "common";
   const payload = await tokenRequest(
     `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
@@ -142,7 +143,7 @@ export async function completeMicrosoftOauth(code: string, state: string) {
       redirect_uri: `${appUrl()}/api/oauth/microsoft/callback`,
       grant_type: "authorization_code",
       code,
-      code_verifier: verifier,
+      code_verifier: oauthState.verifier,
       scope: MICROSOFT_SCOPES.join(" "),
     },
   );
@@ -167,6 +168,7 @@ export async function completeMicrosoftOauth(code: string, state: string) {
   };
   const email = profile.mail || profile.userPrincipalName || profile.id;
   return saveAccount({
+    userId: oauthState.userId,
     provider: "microsoft",
     providerAccountId: profile.id,
     email,
