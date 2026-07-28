@@ -10,7 +10,6 @@ import {
   RefreshCw,
   ShieldCheck,
   Trash2,
-  UserRound,
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -28,8 +27,6 @@ export function SettingsPanel() {
   const params = useSearchParams();
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [user, setUser] = useState<{ name: string; email: string } | null>(null);
-  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
-  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [migrationPasscode, setMigrationPasscode] = useState("");
@@ -40,19 +37,24 @@ export function SettingsPanel() {
   const [error, setError] = useState(params.get("error") || "");
 
   const load = useCallback(async () => {
-    const session = await fetch("/api/session").then((response) => response.json());
+    const [sessionResponse, configResponse] = await Promise.all([
+      fetch("/api/session"),
+      fetch("/api/config"),
+    ]);
+    const session = await sessionResponse.json();
     setAuthenticated(Boolean(session.authenticated));
     setUser(session.user || null);
+    if (configResponse.ok) {
+      setConfig(await configResponse.json());
+    }
     if (!session.authenticated) return;
-    const [accountResponse, configResponse, claimResponse] = await Promise.all([
+    const [accountResponse, claimResponse] = await Promise.all([
       fetch("/api/accounts"),
-      fetch("/api/config"),
       fetch("/api/bootstrap/claim"),
     ]);
-    if (!accountResponse.ok || !configResponse.ok) return;
+    if (!accountResponse.ok) return;
     const accountPayload = await accountResponse.json();
     setAccounts(accountPayload.accounts);
-    setConfig(await configResponse.json());
     if (claimResponse.ok) {
       const claimPayload = await claimResponse.json();
       setUnownedAccounts(Number(claimPayload.unownedAccounts || 0));
@@ -65,40 +67,33 @@ export function SettingsPanel() {
 
   async function authenticate(event: FormEvent) {
     event.preventDefault();
-    setBusy("auth");
+    setBusy("password");
     setError("");
-    const result =
-      authMode === "signup"
-        ? await authClient.signUp.email({
-            name: name.trim(),
-            email: email.trim(),
-            password,
-          })
-        : await authClient.signIn.email({
-            email: email.trim(),
-            password,
-          });
+    const result = await authClient.signIn.email({
+      email: email.trim(),
+      password,
+    });
     if (result.error) {
       setBusy(null);
       setError(result.error.message || "Authentication failed.");
       return;
     }
-    if (authMode === "signup" && migrationPasscode) {
-      const claimResponse = await fetch("/api/bootstrap/claim", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ passcode: migrationPasscode }),
-      });
-      if (!claimResponse.ok) {
-        const payload = await claimResponse.json();
-        setError(
-          payload.error ||
-            "Your account was created, but existing mail was not migrated.",
-        );
-      }
-    }
     setBusy(null);
     await load();
+  }
+
+  async function socialSignIn(provider: "google" | "microsoft") {
+    setBusy(provider);
+    setError("");
+    const result = await authClient.signIn.social({
+      provider,
+      callbackURL: `/api/auth/provider-complete/${provider}`,
+      errorCallbackURL: "/settings",
+    });
+    if (result.error) {
+      setBusy(null);
+      setError(result.error.message || `${provider} sign-in failed.`);
+    }
   }
 
   async function claimExistingMail(event: FormEvent) {
@@ -201,143 +196,127 @@ export function SettingsPanel() {
             </div>
           </aside>
 
-          <form
-            className={`unlock-card auth-mode-${authMode}`}
-            onSubmit={authenticate}
-          >
-            <div className="auth-intro" key={`intro-${authMode}`}>
-              <p className="settings-eyebrow">Rubidium account</p>
-              <h1>
-                {authMode === "signup" ? "Create your account" : "Welcome back"}
-              </h1>
+          <section className="unlock-card">
+            <div className="auth-intro">
+              <p className="settings-eyebrow">Your email is your account</p>
+              <h1>Enter Rubidium</h1>
               <p>
-                {authMode === "signup"
-                  ? "Start with a private workspace, then bring in the accounts you use."
-                  : "Sign in to continue to your private mail workspace."}
+                Sign in with the inbox you already use. Rubidium creates your
+                private workspace and connects it in the same flow.
               </p>
             </div>
 
-            <div
-              className={`auth-switch ${
-                authMode === "signup" ? "show-signup" : ""
-              }`}
-              role="group"
-              aria-label="Authentication mode"
-            >
+            <div className="auth-provider-stack" aria-label="Sign in options">
               <button
                 type="button"
-                aria-pressed={authMode === "signin"}
-                className={authMode === "signin" ? "active" : ""}
-                onClick={() => {
-                  setAuthMode("signin");
-                  setError("");
-                }}
+                className="auth-provider-button google"
+                disabled={
+                  Boolean(busy) || config?.providers.google === false
+                }
+                onClick={() => void socialSignIn("google")}
               >
-                Sign in
+                <span className="auth-provider-mark">G</span>
+                <span>
+                  <strong>Continue with Google</strong>
+                  <small>Gmail + Google Calendar</small>
+                </span>
+                {busy === "google" ? (
+                  <LoaderCircle className="spin" size={17} />
+                ) : (
+                  <span className="auth-provider-arrow">→</span>
+                )}
               </button>
               <button
                 type="button"
-                aria-pressed={authMode === "signup"}
-                className={authMode === "signup" ? "active" : ""}
-                onClick={() => {
-                  setAuthMode("signup");
-                  setError("");
-                }}
+                className="auth-provider-button microsoft"
+                disabled={
+                  Boolean(busy) || config?.providers.microsoft === false
+                }
+                onClick={() => void socialSignIn("microsoft")}
               >
-                Create account
+                <span className="auth-provider-mark">
+                  <i />
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                <span>
+                  <strong>Continue with Microsoft</strong>
+                  <small>Outlook + Microsoft Calendar</small>
+                </span>
+                {busy === "microsoft" ? (
+                  <LoaderCircle className="spin" size={17} />
+                ) : (
+                  <span className="auth-provider-arrow">→</span>
+                )}
               </button>
             </div>
 
-            <div
-              className="auth-fields"
-              id="auth-fields"
-              key={`fields-${authMode}`}
-            >
-              {authMode === "signup" ? (
-                <label>
-                  Name
-                  <span>
-                    <UserRound size={17} />
-                    <input
-                      autoComplete="name"
-                      placeholder="Your name"
-                      required
-                      value={name}
-                      onChange={(event) => setName(event.target.value)}
-                    />
-                  </span>
-                </label>
-              ) : null}
-              <label>
-                Email
-                <span>
-                  <Mail size={17} />
-                  <input
-                    type="email"
-                    autoComplete="email"
-                    placeholder="you@example.com"
-                    required
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                  />
-                </span>
-              </label>
-              <label>
-                Password
-                <span>
-                  <LockKeyhole size={17} />
-                  <input
-                    type="password"
-                    autoComplete={
-                      authMode === "signup" ? "new-password" : "current-password"
-                    }
-                    minLength={8}
-                    placeholder="At least 8 characters"
-                    required
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                  />
-                </span>
-              </label>
-              {authMode === "signup" ? (
-                <label>
-                  <span className="auth-label-copy">
-                    Existing-owner passcode <small>optional</small>
-                  </span>
-                  <span>
-                    <ShieldCheck size={17} />
-                    <input
-                      type="password"
-                      inputMode="numeric"
-                      autoComplete="off"
-                      value={migrationPasscode}
-                      onChange={(event) =>
-                        setMigrationPasscode(event.target.value)
-                      }
-                      placeholder="Only for claiming existing mail"
-                    />
-                  </span>
-                </label>
-              ) : null}
-            </div>
+            {config &&
+            !config.providers.google &&
+            !config.providers.microsoft ? (
+              <div className="settings-error" role="alert">
+                Social sign-in is not configured on this deployment.
+              </div>
+            ) : null}
 
             {error ? (
               <div className="settings-error" role="alert">
                 {error}
               </div>
             ) : null}
-            <button className="settings-primary" disabled={busy === "auth"}>
-              {busy === "auth" ? (
-                <LoaderCircle className="spin" size={17} />
-              ) : null}
-              {authMode === "signup" ? "Create private workspace" : "Sign in"}
-            </button>
+
+            <details className="auth-password-fallback">
+              <summary>Use an existing Rubidium password</summary>
+              <form onSubmit={authenticate}>
+                <div className="auth-fields">
+                  <label>
+                    Email
+                    <span>
+                      <Mail size={17} />
+                      <input
+                        type="email"
+                        autoComplete="email"
+                        placeholder="you@example.com"
+                        required
+                        value={email}
+                        onChange={(event) => setEmail(event.target.value)}
+                      />
+                    </span>
+                  </label>
+                  <label>
+                    Password
+                    <span>
+                      <LockKeyhole size={17} />
+                      <input
+                        type="password"
+                        autoComplete="current-password"
+                        minLength={8}
+                        placeholder="Your existing password"
+                        required
+                        value={password}
+                        onChange={(event) => setPassword(event.target.value)}
+                      />
+                    </span>
+                  </label>
+                </div>
+                <button
+                  className="settings-primary"
+                  disabled={busy === "password"}
+                >
+                  {busy === "password" ? (
+                    <LoaderCircle className="spin" size={17} />
+                  ) : null}
+                  Sign in with password
+                </button>
+              </form>
+            </details>
+
             <small className="auth-note">
-              {authMode === "signup"
-                ? "Your workspace starts empty. You choose which mailboxes to connect."
-                : "New here? Create an account, then connect Gmail or Outlook in one click."}
+              New users are created automatically. You can connect more
+              mailboxes later without creating another Rubidium account.
             </small>
-          </form>
+          </section>
         </section>
       </main>
     );

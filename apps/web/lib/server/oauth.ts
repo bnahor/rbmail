@@ -108,25 +108,65 @@ export async function completeGoogleOauth(code: string, state: string) {
     code_verifier: oauthState.verifier,
   });
   const token = normalizeToken(payload);
+  return saveProviderAccountFromToken("google", oauthState.userId, token);
+}
+
+export async function saveProviderAccountFromToken(
+  provider: Provider,
+  userId: string,
+  token: StoredToken,
+) {
+  if (provider === "google") {
+    const profileResponse = await fetch(
+      "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+      {
+        headers: { authorization: `Bearer ${token.accessToken}` },
+        cache: "no-store",
+      },
+    );
+    if (!profileResponse.ok) {
+      throw new Error(
+        `Unable to read Gmail profile (${profileResponse.status}).`,
+      );
+    }
+    const profile = (await profileResponse.json()) as {
+      emailAddress: string;
+    };
+    return saveAccount({
+      userId,
+      provider: "google",
+      providerAccountId: profile.emailAddress.toLowerCase(),
+      email: profile.emailAddress,
+      displayName: profile.emailAddress.split("@")[0],
+      token,
+    });
+  }
+
   const profileResponse = await fetch(
-    "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+    "https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName",
     {
       headers: { authorization: `Bearer ${token.accessToken}` },
       cache: "no-store",
     },
   );
   if (!profileResponse.ok) {
-    throw new Error(`Unable to read Gmail profile (${profileResponse.status}).`);
+    throw new Error(
+      `Unable to read Microsoft profile (${profileResponse.status}).`,
+    );
   }
   const profile = (await profileResponse.json()) as {
-    emailAddress: string;
+    id: string;
+    displayName?: string;
+    mail?: string;
+    userPrincipalName?: string;
   };
+  const email = profile.mail || profile.userPrincipalName || profile.id;
   return saveAccount({
-    userId: oauthState.userId,
-    provider: "google",
-    providerAccountId: profile.emailAddress.toLowerCase(),
-    email: profile.emailAddress,
-    displayName: profile.emailAddress.split("@")[0],
+    userId,
+    provider: "microsoft",
+    providerAccountId: profile.id,
+    email,
+    displayName: profile.displayName || email.split("@")[0],
     token,
   });
 }
@@ -148,33 +188,7 @@ export async function completeMicrosoftOauth(code: string, state: string) {
     },
   );
   const token = normalizeToken(payload);
-  const profileResponse = await fetch(
-    "https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName",
-    {
-      headers: { authorization: `Bearer ${token.accessToken}` },
-      cache: "no-store",
-    },
-  );
-  if (!profileResponse.ok) {
-    throw new Error(
-      `Unable to read Microsoft profile (${profileResponse.status}).`,
-    );
-  }
-  const profile = (await profileResponse.json()) as {
-    id: string;
-    displayName?: string;
-    mail?: string;
-    userPrincipalName?: string;
-  };
-  const email = profile.mail || profile.userPrincipalName || profile.id;
-  return saveAccount({
-    userId: oauthState.userId,
-    provider: "microsoft",
-    providerAccountId: profile.id,
-    email,
-    displayName: profile.displayName || email.split("@")[0],
-    token,
-  });
+  return saveProviderAccountFromToken("microsoft", oauthState.userId, token);
 }
 
 export async function refreshGoogleToken(refreshToken: string) {

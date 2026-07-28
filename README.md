@@ -13,7 +13,7 @@ The repository contains:
 
 - a responsive Next.js mail client with desktop and mobile interaction patterns;
 - encrypted local SQLite storage;
-- multi-user email/password accounts with tenant-isolated mail and calendars;
+- multi-user Google/Microsoft sign-in with tenant-isolated mail and calendars;
 - Gmail OAuth and Gmail History synchronization;
 - Microsoft identity OAuth and Graph delta synchronization;
 - a provider-neutral normalized mail model;
@@ -39,17 +39,21 @@ pnpm dev
 Open `http://localhost:3000/settings`, connect an account, and keep the local
 server running while OAuth completes.
 
-Rubidium uses self-hosted Better Auth accounts for the app login. Each new user
-gets an empty, isolated workspace and then links their own Gmail and Outlook
-mailboxes. Set `BETTER_AUTH_SECRET` to at least 32 high-entropy characters in
-production. `RBMAIL_ACCESS_PASSWORD` is only a one-time migration code: after
-the first existing owner creates an account, they can use it to claim mail that
-was synced by the older single-owner release.
+Rubidium uses Better Auth with Google and Microsoft as its primary login. The
+first provider consent creates an isolated Rubidium user, connects that same
+mailbox and calendar, and starts synchronization. Existing password accounts
+can still sign in as a fallback, but new password-only registration is disabled.
+Additional Gmail and Outlook accounts can be attached from Settings. Set
+`BETTER_AUTH_SECRET` to at least 32 high-entropy characters in production.
+`RBMAIL_ACCESS_PASSWORD` is only a one-time migration code for mail synced by
+the older single-owner release.
 
 ### OAuth callbacks
 
-- Google: `http://localhost:3000/api/oauth/google/callback`
-- Microsoft: `http://localhost:3000/api/oauth/microsoft/callback`
+- Google sign-in: `http://localhost:3000/api/auth/callback/google`
+- Google additional mailbox: `http://localhost:3000/api/oauth/google/callback`
+- Microsoft sign-in: `http://localhost:3000/api/auth/callback/microsoft`
+- Microsoft additional mailbox: `http://localhost:3000/api/oauth/microsoft/callback`
 
 Google requires the Gmail and Google Calendar APIs with delegated
 `gmail.modify`, `gmail.send`, `calendar.events`, and

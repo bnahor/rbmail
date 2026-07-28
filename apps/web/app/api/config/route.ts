@@ -1,10 +1,6 @@
-import { requireUser, unauthorized } from "@/lib/server/auth";
-
 export const runtime = "nodejs";
 
-export async function GET(request: Request) {
-  const user = await requireUser(request);
-  if (!user) return unauthorized();
+export async function GET() {
   return Response.json({
     providers: {
       google: Boolean(

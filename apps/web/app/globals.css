@@ -2875,6 +2875,173 @@ textarea:focus-visible {
   line-height: 1.45;
 }
 
+.auth-provider-stack {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+  animation: auth-content-in 240ms 70ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.auth-provider-button {
+  display: grid;
+  width: 100%;
+  min-height: 66px;
+  grid-template-columns: 38px 1fr auto;
+  align-items: center;
+  gap: 13px;
+  border: 1px solid #d7d5ce;
+  border-radius: 11px;
+  outline: none;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--ink);
+  cursor: pointer;
+  padding: 10px 14px;
+  text-align: left;
+  box-shadow: 0 2px 3px rgba(35, 36, 33, 0.02);
+  transition:
+    border-color 160ms ease,
+    box-shadow 180ms ease,
+    transform 180ms var(--spring),
+    background 160ms ease;
+}
+
+.auth-provider-button:hover {
+  border-color: #bcb9b0;
+  background: #fff;
+  box-shadow: 0 9px 26px rgba(35, 36, 33, 0.08);
+  transform: translateY(-2px);
+}
+
+.auth-provider-button:active {
+  box-shadow: 0 3px 10px rgba(35, 36, 33, 0.06);
+  transform: translateY(0) scale(0.995);
+}
+
+.auth-provider-button:focus-visible {
+  border-color: #ee4f31;
+  box-shadow: 0 0 0 3px rgba(238, 79, 49, 0.12);
+}
+
+.auth-provider-button:disabled {
+  cursor: default;
+  opacity: 0.52;
+  transform: none;
+}
+
+.auth-provider-button > span:nth-child(2) {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.auth-provider-button strong {
+  font-size: 12px;
+  font-weight: 760;
+  letter-spacing: -0.01em;
+}
+
+.auth-provider-button small {
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+
+.auth-provider-mark {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid #e1dfd8;
+  border-radius: 9px;
+  background: #fff;
+  font-size: 16px;
+  font-weight: 780;
+}
+
+.auth-provider-button.google .auth-provider-mark {
+  color: #4285f4;
+}
+
+.auth-provider-button.microsoft .auth-provider-mark {
+  grid-template-columns: repeat(2, 7px);
+  grid-template-rows: repeat(2, 7px);
+  gap: 2px;
+}
+
+.auth-provider-button.microsoft .auth-provider-mark i {
+  width: 7px;
+  height: 7px;
+  background: #f25022;
+}
+
+.auth-provider-button.microsoft .auth-provider-mark i:nth-child(2) {
+  background: #7fba00;
+}
+
+.auth-provider-button.microsoft .auth-provider-mark i:nth-child(3) {
+  background: #00a4ef;
+}
+
+.auth-provider-button.microsoft .auth-provider-mark i:nth-child(4) {
+  background: #ffb900;
+}
+
+.auth-provider-arrow {
+  color: #85857f;
+  font-size: 17px;
+  transition: transform 180ms var(--spring);
+}
+
+.auth-provider-button:hover .auth-provider-arrow {
+  transform: translateX(3px);
+}
+
+.auth-password-fallback {
+  margin-top: 18px;
+  border-top: 1px solid #e3e1da;
+  padding-top: 13px;
+}
+
+.auth-password-fallback summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 680;
+  list-style: none;
+  outline: none;
+  transition: color 140ms ease;
+}
+
+.auth-password-fallback summary::-webkit-details-marker {
+  display: none;
+}
+
+.auth-password-fallback summary:hover {
+  color: var(--ink-soft);
+}
+
+.auth-password-fallback summary:focus-visible {
+  color: #b24b3b;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.auth-password-fallback[open] summary {
+  color: var(--ink-soft);
+}
+
+.auth-password-fallback form {
+  animation: auth-content-in 190ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.unlock-card > .auth-note {
+  margin-top: auto;
+  padding-top: 18px;
+}
+
 .auth-switch {
   position: relative;
   display: grid;

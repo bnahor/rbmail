@@ -2,6 +2,10 @@ import { createHash, timingSafeEqual } from "node:crypto";
 
 import { betterAuth } from "better-auth";
 
+import {
+  GOOGLE_SCOPES,
+  MICROSOFT_SCOPES,
+} from "@/lib/mail/calendar-core";
 import { getMasterKey } from "@/lib/server/crypto";
 import { getDatabase } from "@/lib/server/db";
 
@@ -24,10 +28,50 @@ export const auth = betterAuth({
   secret: authSecret(),
   database: getDatabase(),
   trustedOrigins: [appUrl()],
+  socialProviders: {
+    ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
+      ? {
+          google: {
+            clientId: process.env.GOOGLE_CLIENT_ID,
+            clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+            accessType: "offline" as const,
+            prompt: "select_account consent" as const,
+            scope: [...GOOGLE_SCOPES],
+          },
+        }
+      : {}),
+    ...(process.env.MICROSOFT_CLIENT_ID &&
+    process.env.MICROSOFT_CLIENT_SECRET
+      ? {
+          microsoft: {
+            clientId: process.env.MICROSOFT_CLIENT_ID,
+            clientSecret: process.env.MICROSOFT_CLIENT_SECRET,
+            tenantId: process.env.MICROSOFT_TENANT?.trim() || "common",
+            prompt: "select_account" as const,
+            scope: [...MICROSOFT_SCOPES],
+            disableProfilePhoto: true,
+          },
+        }
+      : {}),
+  },
   emailAndPassword: {
     enabled: true,
+    disableSignUp: true,
     minPasswordLength: 8,
     maxPasswordLength: 128,
+  },
+  account: {
+    encryptOAuthTokens: true,
+    updateAccountOnSignIn: true,
+    accountLinking: {
+      enabled: true,
+      trustedProviders: ["google", "microsoft"],
+      // Password registration is disabled above. This lets a verified provider
+      // reclaim and link a matching account created before social sign-in
+      // shipped, while preventing new unverified password registrations.
+      requireLocalEmailVerified: false,
+      updateUserInfoOnLink: true,
+    },
   },
   session: {
     expiresIn: 60 * 60 * 24 * 30,
