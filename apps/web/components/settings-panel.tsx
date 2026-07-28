@@ -10,6 +10,7 @@ import {
   RefreshCw,
   ShieldCheck,
   Trash2,
+  UserRound,
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -166,102 +167,178 @@ export function SettingsPanel() {
 
   if (!authenticated) {
     return (
-      <main className="settings-stage">
-        <form className="unlock-card" onSubmit={authenticate}>
-          <span className="settings-logo">rb</span>
-          <p className="settings-eyebrow">One identity · every inbox</p>
-          <h1>{authMode === "signup" ? "Create your account" : "Welcome back"}</h1>
-          <p>
-            {authMode === "signup"
-              ? "Your Rubidium account keeps your mailboxes private from every other user."
-              : "Sign in to your private mail workspace."}
-          </p>
-          <div className="auth-switch" role="tablist" aria-label="Authentication">
-            <button
-              type="button"
-              className={authMode === "signin" ? "active" : ""}
-              onClick={() => setAuthMode("signin")}
-            >
-              Sign in
-            </button>
-            <button
-              type="button"
-              className={authMode === "signup" ? "active" : ""}
-              onClick={() => setAuthMode("signup")}
-            >
-              Create account
-            </button>
-          </div>
-          {authMode === "signup" ? (
-            <label>
-              Name
+      <main className="settings-stage auth-stage">
+        <section className="auth-shell">
+          <aside className="auth-brand" aria-label="Rubidium">
+            <header>
+              <span className="settings-logo">rb</span>
               <span>
-                <input
-                  autoFocus
-                  autoComplete="name"
-                  required
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                />
+                <strong>Rubidium</strong>
+                <small>Unified mail</small>
               </span>
-            </label>
-          ) : null}
-          <label>
-            Email
-            <span>
-              <Mail size={17} />
-              <input
-                autoFocus={authMode === "signin"}
-                type="email"
-                autoComplete="email"
-                required
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </span>
-          </label>
-          <label>
-            Password
-            <span>
-              <LockKeyhole size={17} />
-              <input
-                type="password"
-                autoComplete={
-                  authMode === "signup" ? "new-password" : "current-password"
-                }
-                minLength={8}
-                required
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </span>
-          </label>
-          {authMode === "signup" ? (
-            <label>
-              Existing-owner passcode <small>optional</small>
+            </header>
+            <div className="auth-brand-copy">
+              <p>One identity · every inbox</p>
+              <h2>All your conversations. None of the switching.</h2>
+              <p>
+                A private workspace for Gmail and Outlook, designed to feel as
+                direct as messaging.
+              </p>
+            </div>
+            <div className="auth-assurances" aria-label="Account benefits">
               <span>
-                <ShieldCheck size={17} />
-                <input
-                  type="password"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  value={migrationPasscode}
-                  onChange={(event) => setMigrationPasscode(event.target.value)}
-                  placeholder="Only needed to claim existing mail"
-                />
+                <ShieldCheck size={16} />
+                Private by default
               </span>
-            </label>
-          ) : null}
-          {error ? <div className="settings-error">{error}</div> : null}
-          <button className="settings-primary" disabled={busy === "auth"}>
-            {busy === "auth" ? <LoaderCircle className="spin" size={17} /> : null}
-            {authMode === "signup" ? "Create private workspace" : "Sign in"}
-          </button>
-          <small className="auth-note">
-            New users start with an empty workspace, then connect their own Gmail
-            or Outlook accounts.
-          </small>
-        </form>
+              <span>
+                <Mail size={16} />
+                Gmail + Outlook
+              </span>
+              <span>
+                <Cloud size={16} />
+                One live workspace
+              </span>
+            </div>
+          </aside>
+
+          <form
+            className={`unlock-card auth-mode-${authMode}`}
+            onSubmit={authenticate}
+          >
+            <div className="auth-intro" key={`intro-${authMode}`}>
+              <p className="settings-eyebrow">Rubidium account</p>
+              <h1>
+                {authMode === "signup" ? "Create your account" : "Welcome back"}
+              </h1>
+              <p>
+                {authMode === "signup"
+                  ? "Start with a private workspace, then bring in the accounts you use."
+                  : "Sign in to continue to your private mail workspace."}
+              </p>
+            </div>
+
+            <div
+              className={`auth-switch ${
+                authMode === "signup" ? "show-signup" : ""
+              }`}
+              role="group"
+              aria-label="Authentication mode"
+            >
+              <button
+                type="button"
+                aria-pressed={authMode === "signin"}
+                className={authMode === "signin" ? "active" : ""}
+                onClick={() => {
+                  setAuthMode("signin");
+                  setError("");
+                }}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                aria-pressed={authMode === "signup"}
+                className={authMode === "signup" ? "active" : ""}
+                onClick={() => {
+                  setAuthMode("signup");
+                  setError("");
+                }}
+              >
+                Create account
+              </button>
+            </div>
+
+            <div
+              className="auth-fields"
+              id="auth-fields"
+              key={`fields-${authMode}`}
+            >
+              {authMode === "signup" ? (
+                <label>
+                  Name
+                  <span>
+                    <UserRound size={17} />
+                    <input
+                      autoComplete="name"
+                      placeholder="Your name"
+                      required
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                    />
+                  </span>
+                </label>
+              ) : null}
+              <label>
+                Email
+                <span>
+                  <Mail size={17} />
+                  <input
+                    type="email"
+                    autoComplete="email"
+                    placeholder="you@example.com"
+                    required
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                  />
+                </span>
+              </label>
+              <label>
+                Password
+                <span>
+                  <LockKeyhole size={17} />
+                  <input
+                    type="password"
+                    autoComplete={
+                      authMode === "signup" ? "new-password" : "current-password"
+                    }
+                    minLength={8}
+                    placeholder="At least 8 characters"
+                    required
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                </span>
+              </label>
+              {authMode === "signup" ? (
+                <label>
+                  <span className="auth-label-copy">
+                    Existing-owner passcode <small>optional</small>
+                  </span>
+                  <span>
+                    <ShieldCheck size={17} />
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      value={migrationPasscode}
+                      onChange={(event) =>
+                        setMigrationPasscode(event.target.value)
+                      }
+                      placeholder="Only for claiming existing mail"
+                    />
+                  </span>
+                </label>
+              ) : null}
+            </div>
+
+            {error ? (
+              <div className="settings-error" role="alert">
+                {error}
+              </div>
+            ) : null}
+            <button className="settings-primary" disabled={busy === "auth"}>
+              {busy === "auth" ? (
+                <LoaderCircle className="spin" size={17} />
+              ) : null}
+              {authMode === "signup" ? "Create private workspace" : "Sign in"}
+            </button>
+            <small className="auth-note">
+              {authMode === "signup"
+                ? "Your workspace starts empty. You choose which mailboxes to connect."
+                : "New here? Create an account, then connect Gmail or Outlook in one click."}
+            </small>
+          </form>
+        </section>
       </main>
     );
   }
