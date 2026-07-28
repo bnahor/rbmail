@@ -6,8 +6,10 @@ import {
 import {
   chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   readFileSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -48,14 +50,49 @@ export function getMasterKey(): Buffer {
   }
 
   const generated = randomBytes(32);
-  writeFileSync(keyPath, generated.toString("base64"), {
-    encoding: "utf8",
-    mode: 0o600,
-    flag: "wx",
-  });
-  chmodSync(keyPath, 0o600);
-  cachedKey = generated;
-  return cachedKey;
+  const temporaryPath = `${keyPath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    writeFileSync(temporaryPath, generated.toString("base64"), {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    chmodSync(temporaryPath, 0o600);
+    try {
+      // A hard link publishes a fully written key atomically. During parallel
+      // Next.js builds, exactly one worker wins and every other worker reads
+      // that same key instead of failing or observing a partial file.
+      linkSync(temporaryPath, keyPath);
+      chmodSync(keyPath, 0o600);
+      cachedKey = generated;
+      return cachedKey;
+    } catch (error) {
+      if (
+        !(
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "EEXIST"
+        )
+      ) {
+        throw error;
+      }
+      const decoded = Buffer.from(
+        readFileSync(keyPath, "utf8").trim(),
+        "base64",
+      );
+      if (decoded.length !== 32) {
+        throw new Error(`Invalid local encryption key at ${keyPath}.`);
+      }
+      cachedKey = decoded;
+      return cachedKey;
+    }
+  } finally {
+    try {
+      unlinkSync(temporaryPath);
+    } catch {
+      // The temporary file may not exist if its creation failed.
+    }
+  }
 }
 
 export function encryptString(value: string): string {
