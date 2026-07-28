@@ -26,6 +26,7 @@ import {
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type TouchEvent as ReactTouchEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -408,6 +409,9 @@ export function MailShell() {
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
   const [mailError, setMailError] = useState("");
+  const [hydratingId, setHydratingId] = useState<string | null>(null);
+  const [threadLoadError, setThreadLoadError] = useState("");
+  const [swipedThreadId, setSwipedThreadId] = useState<string | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
   const [compose, setCompose] = useState({
     accountId: "",
@@ -440,6 +444,12 @@ export function MailShell() {
     })),
   );
   const archiveTimer = useRef<number | null>(null);
+  const swipeStart = useRef<{
+    id: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const suppressThreadClick = useRef<string | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const replyInput = useRef<HTMLTextAreaElement>(null);
   const modalReturnFocus = useRef<HTMLElement | null>(null);
@@ -779,7 +789,48 @@ export function MailShell() {
     return () => window.removeEventListener("resize", resetResponsiveState);
   }, []);
 
+  function startThreadSwipe(
+    id: string,
+    event: ReactTouchEvent<HTMLButtonElement>,
+  ) {
+    const touch = event.touches[0];
+    if (!touch) return;
+    swipeStart.current = {
+      id,
+      x: touch.clientX,
+      y: touch.clientY,
+    };
+  }
+
+  function finishThreadSwipe(
+    id: string,
+    event: ReactTouchEvent<HTMLButtonElement>,
+  ) {
+    const start = swipeStart.current;
+    const touch = event.changedTouches[0];
+    swipeStart.current = null;
+    if (!start || start.id !== id || !touch) return;
+
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (Math.abs(deltaX) < 28 || Math.abs(deltaX) <= Math.abs(deltaY)) return;
+
+    suppressThreadClick.current = id;
+    window.setTimeout(() => {
+      if (suppressThreadClick.current === id) {
+        suppressThreadClick.current = null;
+      }
+    }, 300);
+    setSwipedThreadId(deltaX < 0 ? id : null);
+  }
+
   async function chooseThread(id: string) {
+    if (suppressThreadClick.current === id) {
+      suppressThreadClick.current = null;
+      return;
+    }
+    setSwipedThreadId(null);
+    setThreadLoadError("");
     setSelectedId(id);
     if (window.innerWidth < 700) setMobileThreadOpen(true);
     setThreads((current) =>
@@ -789,8 +840,16 @@ export function MailShell() {
     );
     const thread = threads.find((candidate) => candidate.id === id);
     if (thread?.remoteAccountId && thread.messages.length === 0) {
-      const response = await fetch(`/api/threads/${encodeURIComponent(id)}`);
-      if (response.ok) {
+      setHydratingId(id);
+      try {
+        const response = await fetch(`/api/threads/${encodeURIComponent(id)}`);
+        if (response.status === 401) {
+          window.location.assign("/settings");
+          return;
+        }
+        if (!response.ok) {
+          throw new Error(`Thread request failed with ${response.status}`);
+        }
         const payload = (await response.json()) as { thread: ThreadDetail };
         setThreads((current) =>
           current.map((candidate) =>
@@ -799,6 +858,12 @@ export function MailShell() {
               : candidate,
           ),
         );
+      } catch {
+        setThreadLoadError(
+          "This conversation could not be loaded. Check your connection and try again.",
+        );
+      } finally {
+        setHydratingId((current) => (current === id ? null : current));
       }
     }
   }
@@ -829,6 +894,7 @@ export function MailShell() {
   function archiveThread(id: string) {
     const thread = threads.find((candidate) => candidate.id === id);
     if (!thread || archivingId === id) return;
+    setSwipedThreadId((current) => (current === id ? null : current));
     if (archiveTimer.current && archivedThread) {
       window.clearTimeout(archiveTimer.current);
       void commitArchive(archivedThread);
@@ -1231,7 +1297,7 @@ export function MailShell() {
                     <li
                       className={`thread-swipe-wrap ${
                         archivingId === thread.id ? "archiving" : ""
-                      }`}
+                      } ${swipedThreadId === thread.id ? "swiped" : ""}`}
                       key={thread.id}
                       style={{
                         "--row-delay": `${Math.min(animationIndex, 6) * 22}ms`,
@@ -1243,8 +1309,20 @@ export function MailShell() {
                         } ${thread.unread ? "unread" : ""}`}
                         type="button"
                         aria-current={selected?.id === thread.id ? "true" : undefined}
+                        aria-expanded={
+                          swipedThreadId === thread.id ? "true" : undefined
+                        }
                         aria-label={`${thread.unread ? "Unread, " : ""}${thread.sender}, ${thread.subject}, ${thread.time}, ${provider}`}
                         onClick={() => void chooseThread(thread.id)}
+                        onTouchStart={(event) =>
+                          startThreadSwipe(thread.id, event)
+                        }
+                        onTouchEnd={(event) =>
+                          finishThreadSwipe(thread.id, event)
+                        }
+                        onTouchCancel={() => {
+                          swipeStart.current = null;
+                        }}
                       >
                         <span
                           className="avatar"
@@ -1360,47 +1438,67 @@ export function MailShell() {
               </div>
 
               <div className="message-stream">
-                {selected.messages.map((message) => (
-                  <article
-                    className={`message-card ${
-                      message.outgoing ? "outgoing" : "incoming"
-                    } ${message.html ? "has-rich-content" : ""} ${
-                      message.pending ? "pending" : ""
-                    } ${message.failed ? "failed" : ""}`}
-                    key={message.id}
-                  >
-                    <header>
-                      <div className="mini-avatar">
-                        {message.outgoing ? "RB" : selected.initials}
+                {hydratingId === selected.id ? (
+                  <div className="thread-loading" role="status" aria-live="polite">
+                    <span />
+                    <span />
+                    <span />
+                    <p>Loading conversation…</p>
+                  </div>
+                ) : threadLoadError ? (
+                  <div className="thread-load-error" role="alert">
+                    <MessageCircle size={22} />
+                    <p>{threadLoadError}</p>
+                    <button
+                      type="button"
+                      onClick={() => void chooseThread(selected.id)}
+                    >
+                      Try again
+                    </button>
+                  </div>
+                ) : (
+                  selected.messages.map((message) => (
+                    <article
+                      className={`message-card ${
+                        message.outgoing ? "outgoing" : "incoming"
+                      } ${message.html ? "has-rich-content" : ""} ${
+                        message.pending ? "pending" : ""
+                      } ${message.failed ? "failed" : ""}`}
+                      key={message.id}
+                    >
+                      <header>
+                        <div className="mini-avatar">
+                          {message.outgoing ? "RB" : selected.initials}
+                        </div>
+                        <span>
+                          <strong>{message.author}</strong>
+                          <small>{message.email}</small>
+                        </span>
+                        <time>
+                          {message.failed
+                            ? "Couldn’t send"
+                            : message.pending
+                              ? "Sending…"
+                              : message.time}
+                        </time>
+                      </header>
+                      <RichMessageBody
+                        html={message.html}
+                        fallback={message.body}
+                        author={message.author}
+                        subject={selected.subject}
+                      />
+                      <div className="message-action-rail">
+                        <IconButton
+                          label={`Reply to ${message.author}`}
+                          onClick={() => replyInput.current?.focus()}
+                        >
+                          <Reply size={15} />
+                        </IconButton>
                       </div>
-                      <span>
-                        <strong>{message.author}</strong>
-                        <small>{message.email}</small>
-                      </span>
-                      <time>
-                        {message.failed
-                          ? "Couldn’t send"
-                          : message.pending
-                            ? "Sending…"
-                            : message.time}
-                      </time>
-                    </header>
-                    <RichMessageBody
-                      html={message.html}
-                      fallback={message.body}
-                      author={message.author}
-                      subject={selected.subject}
-                    />
-                    <div className="message-action-rail">
-                      <IconButton
-                        label={`Reply to ${message.author}`}
-                        onClick={() => replyInput.current?.focus()}
-                      >
-                        <Reply size={15} />
-                      </IconButton>
-                    </div>
-                  </article>
-                ))}
+                    </article>
+                  ))
+                )}
               </div>
 
               {mailError ? <div className="reply-error">{mailError}</div> : null}
@@ -1422,7 +1520,7 @@ export function MailShell() {
                 <textarea
                   ref={replyInput}
                   value={reply}
-                  rows={2}
+                  rows={1}
                   aria-label="Write a reply"
                   placeholder="Write a reply…"
                   onChange={(event) => setReply(event.target.value)}

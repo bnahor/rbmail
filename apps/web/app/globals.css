@@ -1535,7 +1535,7 @@ textarea:focus-visible {
   }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 699px) {
   body {
     overflow: hidden;
   }
@@ -3323,7 +3323,9 @@ textarea:focus-visible {
   border-radius: 0;
   background: #f8f7f4;
   padding: 10px 34px 9px 16px;
-  transition: background 120ms ease;
+  transition:
+    background 120ms ease,
+    transform 220ms var(--spring);
 }
 
 .mail-stage .thread-row:hover,
@@ -3413,9 +3415,14 @@ textarea:focus-visible {
 }
 
 .mail-stage .thread-swipe-wrap:hover .row-action-rail,
-.mail-stage .thread-swipe-wrap:focus-within .row-action-rail {
+.mail-stage .thread-swipe-wrap:focus-within .row-action-rail,
+.mail-stage .thread-swipe-wrap.swiped .row-action-rail {
   opacity: 1;
   pointer-events: auto;
+}
+
+.mail-stage .thread-swipe-wrap.swiped .thread-row {
+  transform: translateX(-58px);
 }
 
 .mail-stage .row-action-rail .icon-button {
@@ -3482,6 +3489,74 @@ textarea:focus-visible {
 
 .mail-stage .message-stream {
   gap: 0;
+}
+
+.mail-stage .thread-loading,
+.mail-stage .thread-load-error {
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+  align-content: center;
+  color: #747570;
+  text-align: center;
+}
+
+.mail-stage .thread-loading {
+  grid-template-columns: repeat(3, 7px);
+  gap: 6px;
+}
+
+.mail-stage .thread-loading span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #cc4420;
+  animation: loading-pulse 900ms ease-in-out infinite alternate;
+}
+
+.mail-stage .thread-loading span:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.mail-stage .thread-loading span:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+.mail-stage .thread-loading p {
+  grid-column: 1 / -1;
+  margin: 5px 0 0;
+  font-size: 13px;
+}
+
+@keyframes loading-pulse {
+  to {
+    opacity: 0.35;
+    transform: translateY(-3px);
+  }
+}
+
+.mail-stage .thread-load-error {
+  gap: 8px;
+}
+
+.mail-stage .thread-load-error p {
+  max-width: 320px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.mail-stage .thread-load-error button {
+  min-height: 40px;
+  border: 1px solid #d4d3cd;
+  border-radius: 9px;
+  background: #fff;
+  color: #333431;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 720;
+  padding: 0 15px;
 }
 
 .mail-stage .message-card {
@@ -3798,7 +3873,7 @@ textarea:focus-visible {
 }
 
 @media (max-width: 1024px) and (min-width: 700px) {
-  .mail-app {
+  .mail-stage .mail-app {
     grid-template-columns: 64px 318px minmax(0, 1fr);
   }
 
@@ -3851,6 +3926,14 @@ textarea:focus-visible {
   .mail-stage .conversation-scroll {
     padding-inline: 24px 52px;
   }
+
+  .mail-stage .thread-heading {
+    flex: 1;
+  }
+
+  .mail-stage .thread-heading h2 {
+    max-width: min(48vw, 580px);
+  }
 }
 
 @media (max-width: 699px) {
@@ -3865,7 +3948,8 @@ textarea:focus-visible {
     inset: 0 auto 0 0;
     width: min(286px, 86vw);
     transform: translateX(-102%);
-    transition: transform 200ms ease;
+    padding-bottom: max(15px, env(safe-area-inset-bottom));
+    transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .mail-stage .sidebar.sidebar-open {
@@ -3888,6 +3972,7 @@ textarea:focus-visible {
   .mail-stage .inbox-panel {
     display: flex;
     width: 100%;
+    min-height: 100svh;
     height: 100dvh;
   }
 
@@ -3895,9 +3980,10 @@ textarea:focus-visible {
     position: absolute;
     z-index: 20;
     inset: 0;
+    min-height: 100svh;
     height: 100dvh;
     transform: translateX(100%);
-    transition: transform 220ms ease;
+    transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .mail-stage .mobile-thread-open .thread-panel {
@@ -3905,8 +3991,33 @@ textarea:focus-visible {
   }
 
   .mail-stage .thread-header {
-    min-height: 84px;
-    padding: 12px 14px;
+    min-height: 72px;
+    gap: 6px;
+    padding:
+      max(8px, env(safe-area-inset-top))
+      9px
+      8px;
+  }
+
+  .mail-stage .thread-heading {
+    flex: 1;
+  }
+
+  .mail-stage .thread-heading h2 {
+    max-width: none;
+    font-size: 20px;
+  }
+
+  .mail-stage .thread-actions {
+    flex: 0 0 auto;
+  }
+
+  .mail-stage .thread-actions .icon-button:first-child {
+    display: none;
+  }
+
+  .mail-stage .thread-actions .icon-button:nth-child(2) {
+    display: inline-grid;
   }
 
   .mail-stage .participant-chips {
@@ -3926,7 +4037,10 @@ textarea:focus-visible {
   }
 
   .mail-stage .reply-dock {
-    padding: 8px;
+    padding:
+      6px
+      8px
+      max(7px, env(safe-area-inset-bottom));
   }
 
   .mail-stage .replying-to {
@@ -3938,15 +4052,92 @@ textarea:focus-visible {
     margin-left: 0 !important;
   }
 
+  .mail-stage .reply-mode {
+    min-height: 34px;
+  }
+
+  .mail-stage .reply-box textarea {
+    height: 46px;
+    min-height: 46px;
+    padding: 10px 12px 4px;
+  }
+
+  .mail-stage .reply-box:focus-within textarea {
+    height: 74px;
+    min-height: 74px;
+  }
+
+  .mail-stage .composer-actions {
+    box-sizing: border-box;
+    height: 44px;
+    min-height: 44px;
+    padding-bottom: 5px;
+  }
+
+  .mail-stage .icon-button,
+  .mail-stage .thread-header > .icon-button,
+  .mail-stage .thread-actions .icon-button,
+  .mail-stage .row-action-rail .icon-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .mail-stage .compose-button,
+  .mail-stage .view-nav button,
+  .mail-stage .add-account,
+  .mail-stage .sidebar-footer button {
+    min-height: 44px;
+  }
+
+  .mail-stage .all-account-pill {
+    min-height: 44px;
+  }
+
+  .mail-stage .search-trigger {
+    min-height: 46px;
+  }
+
+  .mail-stage .send-button {
+    min-width: 48px;
+    height: 44px;
+  }
+
+  .mail-stage .thread-list,
+  .mail-stage .conversation-scroll {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mail-stage .thread-row:active {
+    background: #eeece7;
+  }
+
+  .mail-stage .thread-load-error button {
+    min-height: 44px;
+  }
+
   .mail-stage .search-layer,
   .mail-stage .compose-layer {
-    padding: 10px;
+    padding:
+      max(10px, env(safe-area-inset-top))
+      10px
+      max(10px, env(safe-area-inset-bottom));
   }
 
   .mail-stage .search-command,
   .mail-stage .compose-modal {
-    max-height: calc(100dvh - 20px);
+    max-height: calc(
+      100dvh - 20px - env(safe-area-inset-top) - env(safe-area-inset-bottom)
+    );
     border-radius: 13px;
+  }
+
+  .mail-stage .compose-modal > header .icon-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .mail-stage .compose-modal > footer button {
+    min-height: 44px;
   }
 }
 
@@ -3962,5 +4153,16 @@ textarea:focus-visible {
 
   .mail-stage .spin {
     animation: settings-spin 900ms linear infinite !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .auth-switch button,
+  .unlock-card .settings-primary {
+    min-height: 44px;
+  }
+
+  .unlock-card input {
+    height: 46px;
   }
 }
