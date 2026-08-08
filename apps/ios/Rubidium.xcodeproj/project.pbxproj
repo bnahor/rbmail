@@ -12,6 +12,10 @@
 		A10000000000000000000003 /* RubidiumWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* RubidiumWebView.swift */; };
 		A10000000000000000000004 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* Assets.xcassets */; };
 		A10000000000000000000005 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* PrivacyInfo.xcprivacy */; };
+		A10000000000000000000006 /* RubidiumHaptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* RubidiumHaptics.swift */; };
+		A10000000000000000000007 /* RubidiumIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* RubidiumIntelligence.swift */; };
+		A10000000000000000000008 /* RubidiumGlass.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* RubidiumGlass.swift */; };
+		A10000000000000000000009 /* RubidiumIntelligenceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* RubidiumIntelligenceView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -22,6 +26,10 @@
 		A20000000000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A20000000000000000000006 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		A20000000000000000000007 /* Rubidium.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Rubidium.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000008 /* RubidiumHaptics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RubidiumHaptics.swift; sourceTree = "<group>"; };
+		A20000000000000000000009 /* RubidiumIntelligence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RubidiumIntelligence.swift; sourceTree = "<group>"; };
+		A2000000000000000000000A /* RubidiumGlass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RubidiumGlass.swift; sourceTree = "<group>"; };
+		A2000000000000000000000B /* RubidiumIntelligenceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RubidiumIntelligenceView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -49,6 +57,10 @@
 				A20000000000000000000001 /* RubidiumApp.swift */,
 				A20000000000000000000002 /* RubidiumRootView.swift */,
 				A20000000000000000000003 /* RubidiumWebView.swift */,
+				A20000000000000000000008 /* RubidiumHaptics.swift */,
+				A20000000000000000000009 /* RubidiumIntelligence.swift */,
+				A2000000000000000000000A /* RubidiumGlass.swift */,
+				A2000000000000000000000B /* RubidiumIntelligenceView.swift */,
 				A20000000000000000000004 /* Assets.xcassets */,
 				A20000000000000000000005 /* Info.plist */,
 				A20000000000000000000006 /* PrivacyInfo.xcprivacy */,
@@ -137,6 +149,10 @@
 				A10000000000000000000001 /* RubidiumApp.swift in Sources */,
 				A10000000000000000000002 /* RubidiumRootView.swift in Sources */,
 				A10000000000000000000003 /* RubidiumWebView.swift in Sources */,
+				A10000000000000000000006 /* RubidiumHaptics.swift in Sources */,
+				A10000000000000000000007 /* RubidiumIntelligence.swift in Sources */,
+				A10000000000000000000008 /* RubidiumGlass.swift in Sources */,
+				A10000000000000000000009 /* RubidiumIntelligenceView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

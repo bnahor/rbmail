@@ -23,6 +23,21 @@ final class RubidiumBrowserModel: ObservableObject {
             isLoading = true
         }
     }
+
+    func visibleMailContext() async -> String {
+        guard let webView else { return "" }
+        let script = """
+        (() => {
+          const root = document.querySelector('main') || document.body;
+          return (root?.innerText || '').slice(0, 12000);
+        })()
+        """
+        do {
+            return try await webView.evaluateJavaScript(script) as? String ?? ""
+        } catch {
+            return ""
+        }
+    }
 }
 
 struct RubidiumWebView: UIViewRepresentable {
@@ -38,6 +53,14 @@ struct RubidiumWebView: UIViewRepresentable {
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
+        configuration.userContentController.add(context.coordinator, name: "rubidiumHaptics")
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: Self.hapticBridgeScript,
+                injectionTime: .atDocumentEnd,
+                forMainFrameOnly: true
+            )
+        )
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -63,7 +86,39 @@ struct RubidiumWebView: UIViewRepresentable {
         model.webView = webView
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+    private static let hapticBridgeScript = """
+    (() => {
+      if (window.__rubidiumHapticsInstalled) return;
+      window.__rubidiumHapticsInstalled = true;
+      const send = kind => window.webkit?.messageHandlers?.rubidiumHaptics?.postMessage(kind);
+      const value = element => `${element?.innerText || ''} ${element?.getAttribute?.('aria-label') || ''} ${element?.title || ''}`.toLowerCase();
+      document.addEventListener('click', event => {
+        const target = event.target?.closest?.('button, a, [role="button"]');
+        if (!target) return;
+        const text = value(target);
+        if (/delete|disconnect|remove/.test(text)) send('destructive');
+        else if (/send|reply|archive|sync|connect|schedule|join|rsvp|save|create/.test(text)) send('action');
+        else if (/inbox|current|today|accounts|settings|calendar/.test(text)) send('selection');
+      }, true);
+      const seen = new WeakSet();
+      new MutationObserver(records => {
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            if (!(node instanceof Element) || seen.has(node)) continue;
+            const alert = node.matches?.('[role="alert"], .settings-success, .settings-error')
+              ? node
+              : node.querySelector?.('[role="alert"], .settings-success, .settings-error');
+            if (!alert) continue;
+            seen.add(node);
+            send(/error|failed|invalid|unable/.test(value(alert)) ? 'error' : 'success');
+          }
+        }
+      }).observe(document.documentElement, { childList: true, subtree: true });
+    })();
+    """
+
+    @MainActor
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         private let model: RubidiumBrowserModel
         private var progressObservation: NSKeyValueObservation?
 
@@ -100,6 +155,22 @@ struct RubidiumWebView: UIViewRepresentable {
             withError error: Error
         ) {
             show(error)
+        }
+
+        func userContentController(
+            _ userContentController: WKUserContentController,
+            didReceive message: WKScriptMessage
+        ) {
+            guard message.frameInfo.securityOrigin.host == "rbmail-production.up.railway.app",
+                  let cue = message.body as? String else { return }
+            switch cue {
+            case "selection": RubidiumHaptics.shared.play(.selection)
+            case "action": RubidiumHaptics.shared.play(.action)
+            case "destructive": RubidiumHaptics.shared.play(.destructive)
+            case "success": RubidiumHaptics.shared.play(.success)
+            case "error": RubidiumHaptics.shared.play(.error)
+            default: break
+            }
         }
 
         func webView(

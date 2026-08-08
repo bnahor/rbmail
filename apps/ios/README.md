@@ -5,6 +5,13 @@ uses a persistent `WKWebView` session so the existing mail, calendar, search,
 and Composio connection flows remain available while individual screens are
 replaced with native SwiftUI over time.
 
+The native layer includes semantic Core Haptics cues for navigation, mail
+actions, success/error states, and a distinct on-device intelligence pattern.
+On iOS 26 and supported Apple Intelligence devices, the native Intelligence
+sheet uses Apple's Foundation Models framework to summarize the visible mail,
+extract next steps, and draft a reply without sending mail content to a hosted
+model. Liquid Glass is used on iOS 26 with material-based fallbacks on iOS 17–25.
+
 ## Run locally
 
 1. Install the current release of Xcode from the Mac App Store.

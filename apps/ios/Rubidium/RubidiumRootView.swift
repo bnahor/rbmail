@@ -2,6 +2,8 @@ import SwiftUI
 
 struct RubidiumRootView: View {
     @EnvironmentObject private var browser: RubidiumBrowserModel
+    @StateObject private var intelligence = RubidiumIntelligenceModel()
+    @State private var isShowingIntelligence = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -10,6 +12,20 @@ struct RubidiumRootView: View {
 
             RubidiumWebView(model: browser)
                 .ignoresSafeArea(.container, edges: .bottom)
+
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    RubidiumIntelligenceButton(isActive: isShowingIntelligence) {
+                        RubidiumHaptics.shared.play(.selection)
+                        intelligence.refreshAvailability()
+                        isShowingIntelligence = true
+                    }
+                }
+                .padding(.trailing, 16)
+                .padding(.bottom, 18)
+            }
 
             if browser.isLoading {
                 GeometryReader { geometry in
@@ -34,6 +50,18 @@ struct RubidiumRootView: View {
         }
         .animation(.spring(response: 0.38, dampingFraction: 0.86), value: browser.errorMessage)
         .background(Color(red: 0.055, green: 0.055, blue: 0.05))
+        .sheet(isPresented: $isShowingIntelligence) {
+            RubidiumIntelligenceView(intelligence: intelligence)
+                .environmentObject(browser)
+        }
+        .onChange(of: browser.errorMessage) { _, error in
+            if error != nil {
+                RubidiumHaptics.shared.play(.error)
+            }
+        }
+        .onAppear {
+            RubidiumHaptics.shared.prepare()
+        }
     }
 
     private func errorCard(_ message: String) -> some View {
@@ -54,6 +82,7 @@ struct RubidiumRootView: View {
             Spacer(minLength: 8)
 
             Button("Retry") {
+                RubidiumHaptics.shared.play(.action)
                 browser.reload()
             }
             .buttonStyle(.borderedProminent)
