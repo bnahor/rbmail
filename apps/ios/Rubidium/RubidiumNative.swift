@@ -240,7 +240,10 @@ struct RubidiumNativeShell: View {
             // visible; it owns the secure first-party cookie used by the
             // provider-neutral native API client.
             mail
-                .ignoresSafeArea(.container, edges: .bottom)
+                // Let the mailbox surface paint behind the status bar and
+                // Dynamic Island. The web header applies the measured top
+                // inset once, so controls remain in the tappable safe area.
+                .ignoresSafeArea(.container, edges: [.top, .bottom])
                 .opacity(selection == .mail ? 1 : 0)
                 .allowsHitTesting(selection == .mail)
                 .accessibilityHidden(selection != .mail)

@@ -5170,12 +5170,11 @@ html[data-rubidium-native="true"] .mail-stage .thread-swipe-wrap.swiped .thread-
   --swipe-offset: 0px;
 }
 
-/* SwiftUI hosts the mailbox inside the top and side safe areas. Keep only the
-   bottom inset here because the native shell deliberately extends behind the
-   home indicator for its floating navigation plane. Without this override,
-   WebKit's env() inset and the SwiftUI safe area are applied twice. */
+/* The native mailbox paints behind the status bar and home indicator. Use the
+   explicitly measured native insets rather than WebKit env(), which can report
+   the outer window inset again and create a doubled content offset. */
 html[data-rubidium-native="true"] {
-  --rubidium-safe-top: 0px;
+  --rubidium-safe-top: var(--rubidium-native-safe-top, 0px);
   --rubidium-safe-right: 0px;
   --rubidium-safe-left: 0px;
   --rubidium-safe-bottom: var(--rubidium-native-safe-bottom, 0px);
@@ -5194,6 +5193,14 @@ html[data-rubidium-native="true"] {
 
   html[data-rubidium-native="true"] .mail-stage .inbox-title-row {
     gap: 10px;
+  }
+
+  html[data-rubidium-native="true"] .mail-stage .inbox-header {
+    padding-top: calc(var(--rubidium-safe-top) + 4px);
+  }
+
+  html[data-rubidium-native="true"] .mail-stage .thread-header {
+    padding-top: calc(var(--rubidium-safe-top) + 4px);
   }
 
   html[data-rubidium-native="true"] .mail-stage .thread-list,

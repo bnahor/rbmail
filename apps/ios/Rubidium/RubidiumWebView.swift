@@ -384,6 +384,7 @@ struct RubidiumWebView: UIViewRepresentable {
         webView.evaluateJavaScript(
             "document.documentElement.dataset.rubidiumTheme = '\(theme)'; document.documentElement.dataset.rubidiumNative = 'true'"
         )
+        context.coordinator.refreshNativeSafeArea(in: webView)
         webView.scrollView.backgroundColor = .systemBackground
         webView.underPageBackgroundColor = .systemBackground
     }
@@ -455,7 +456,7 @@ struct RubidiumWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            applyNativeSafeArea(to: webView)
+            refreshNativeSafeArea(in: webView)
             applyNativeAppearance(to: webView)
             refreshPageContext(in: webView)
             model.progress = 1
@@ -634,14 +635,41 @@ struct RubidiumWebView: UIViewRepresentable {
             RubidiumHaptics.shared.play(.success)
         }
 
+        func refreshNativeSafeArea(in webView: WKWebView) {
+            // didFinish can arrive before SwiftUI has attached and laid out
+            // the representable. Re-measure across the first few layout passes
+            // so an initial zero never places controls under the Dynamic Island.
+            for delay in [0.0, 0.06, 0.22, 0.5] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak webView] in
+                    guard let self, let webView else { return }
+                    self.applyNativeSafeArea(to: webView)
+                }
+            }
+        }
+
         private func applyNativeSafeArea(to webView: WKWebView) {
-            let insets = webView.window?.safeAreaInsets ?? webView.safeAreaInsets
+            let keyWindow = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap(\.windows)
+                .first(where: \.isKeyWindow)
+            let candidates = [
+                webView.window?.safeAreaInsets,
+                keyWindow?.safeAreaInsets,
+                webView.safeAreaInsets,
+            ].compactMap { $0 }
+            let insets = candidates.reduce(UIEdgeInsets.zero) { current, candidate in
+                UIEdgeInsets(
+                    top: max(current.top, candidate.top),
+                    left: max(current.left, candidate.left),
+                    bottom: max(current.bottom, candidate.bottom),
+                    right: max(current.right, candidate.right)
+                )
+            }
             webView.evaluateJavaScript(
                 """
-                // SwiftUI already consumes the top and side safe areas for
-                // this view. Only the bottom is edge-to-edge so the native
-                // control plane can float above the home indicator.
-                document.documentElement.style.setProperty('--rubidium-native-safe-top', '0px');
+                // The mailbox paints edge-to-edge at the top and bottom. Its
+                // controls consume these measured insets exactly once.
+                document.documentElement.style.setProperty('--rubidium-native-safe-top', '\(insets.top)px');
                 document.documentElement.style.setProperty('--rubidium-native-safe-right', '0px');
                 document.documentElement.style.setProperty('--rubidium-native-safe-bottom', '\(insets.bottom)px');
                 document.documentElement.style.setProperty('--rubidium-native-safe-left', '0px');
