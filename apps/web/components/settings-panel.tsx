@@ -18,6 +18,25 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import type { PublicAccount } from "@/lib/mail/types";
 import { authClient } from "@/lib/auth-client";
 
+type NativeAuthMessage = {
+  action: "identity" | "connect";
+  provider: "google" | "microsoft";
+  token?: string;
+};
+
+function nativeAuthBridge() {
+  if (typeof window === "undefined") return null;
+  return (
+    window as typeof window & {
+      webkit?: {
+        messageHandlers?: {
+          rubidiumAuth?: { postMessage(message: NativeAuthMessage): void };
+        };
+      };
+    }
+  ).webkit?.messageHandlers?.rubidiumAuth ?? null;
+}
+
 type AppConfig = {
   providers: { google: boolean; microsoft: boolean };
   integrations: {
@@ -105,6 +124,11 @@ export function SettingsPanel() {
   async function socialSignIn(provider: "google" | "microsoft") {
     setBusy(provider);
     setError("");
+    const bridge = nativeAuthBridge();
+    if (bridge) {
+      bridge.postMessage({ action: "identity", provider });
+      return;
+    }
     const result = await authClient.signIn.social({
       provider,
       callbackURL: `/api/auth/provider-complete/${provider}`,
@@ -114,6 +138,28 @@ export function SettingsPanel() {
       setBusy(null);
       setError(result.error.message || `${provider} sign-in failed.`);
     }
+  }
+
+  async function connectProvider(
+    event: React.MouseEvent<HTMLAnchorElement>,
+    provider: "google" | "microsoft",
+  ) {
+    const bridge = nativeAuthBridge();
+    if (!bridge || !config?.integrations.composio) return;
+    event.preventDefault();
+    setBusy(provider);
+    setError("");
+    const result = await authClient.oneTimeToken.generate();
+    if (result.error || !result.data?.token) {
+      setBusy(null);
+      setError(result.error?.message || "Could not start secure sign-in.");
+      return;
+    }
+    bridge.postMessage({
+      action: "connect",
+      provider,
+      token: result.data.token,
+    });
   }
 
   async function claimExistingMail(event: FormEvent) {
@@ -319,15 +365,22 @@ export function SettingsPanel() {
                   Create account
                 </button>
               </div>
-              <form onSubmit={authenticate}>
+              <form onSubmit={authenticate} autoComplete="on">
                 <div className="auth-fields">
                   <label>
                     Email
                     <span>
                       <Mail size={17} />
                       <input
+                        id="rubidium-username"
+                        name="username"
                         type="email"
-                        autoComplete="email"
+                        autoComplete="username"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        inputMode="email"
+                        enterKeyHint="next"
                         placeholder="you@example.com"
                         required
                         value={email}
@@ -340,6 +393,9 @@ export function SettingsPanel() {
                     <span>
                       <LockKeyhole size={17} />
                       <input
+                        key={authMode}
+                        id="rubidium-password"
+                        name={authMode === "signup" ? "new-password" : "password"}
                         type="password"
                         autoComplete={
                           authMode === "signup"
@@ -347,6 +403,7 @@ export function SettingsPanel() {
                             : "current-password"
                         }
                         minLength={8}
+                        enterKeyHint="go"
                         placeholder={
                           authMode === "signup"
                             ? "Choose a secure password"
@@ -466,6 +523,7 @@ export function SettingsPanel() {
                     ? "/api/composio/connect/google"
                     : "/api/oauth/google/start"
                 }
+                onClick={(event) => void connectProvider(event, "google")}
               >
                 Connect
               </a>
@@ -488,6 +546,7 @@ export function SettingsPanel() {
                     ? "/api/composio/connect/microsoft"
                     : "/api/oauth/microsoft/start"
                 }
+                onClick={(event) => void connectProvider(event, "microsoft")}
               >
                 Connect
               </a>
@@ -530,6 +589,9 @@ export function SettingsPanel() {
                       <a
                         className="settings-reconnect"
                         href={`/api/composio/connect/${account.provider}`}
+                        onClick={(event) =>
+                          void connectProvider(event, account.provider)
+                        }
                       >
                         Move this mailbox to Composio
                       </a>
@@ -543,6 +605,9 @@ export function SettingsPanel() {
                           config?.integrations.composio
                             ? `/api/composio/connect/${account.provider}`
                             : `/api/oauth/${account.provider}/start`
+                        }
+                        onClick={(event) =>
+                          void connectProvider(event, account.provider)
                         }
                       >
                         Reconnect to enable Calendar

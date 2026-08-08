@@ -1,6 +1,11 @@
 import { storedTokenFromSocial } from "@/lib/mail/provider-auth";
 import type { Provider } from "@/lib/mail/types";
-import { auth, requireUser } from "@/lib/server/auth";
+import {
+  auth,
+  nativeAuthError,
+  nativeSessionRedirect,
+  requireUser,
+} from "@/lib/server/auth";
 import { syncAccountCalendars } from "@/lib/server/calendar";
 import { composioConfigured } from "@/lib/server/composio";
 import { saveProviderAccountFromToken } from "@/lib/server/oauth";
@@ -21,8 +26,10 @@ export async function GET(
     );
   }
   const provider = candidate as Provider;
+  const native = new URL(request.url).searchParams.get("native") === "1";
   const user = await requireUser(request);
   if (!user) {
+    if (native) return nativeAuthError("Provider sign-in did not complete.");
     return Response.redirect(
       new URL("/settings?error=Provider+sign-in+did+not+complete", request.url),
     );
@@ -31,7 +38,10 @@ export async function GET(
   try {
     if (composioConfigured()) {
       return Response.redirect(
-        new URL(`/api/composio/connect/${provider}`, request.url),
+        new URL(
+          `/api/composio/connect/${provider}${native ? "?native=1" : ""}`,
+          request.url,
+        ),
       );
     }
     const grant = await auth.api.refreshToken({
@@ -47,12 +57,13 @@ export async function GET(
       syncAccount(account.id, 2),
       syncAccountCalendars(account.id),
     ]);
-    return Response.redirect(
-      new URL(`/?connected=${encodeURIComponent(provider)}`, request.url),
-    );
+    const destination = `/?connected=${encodeURIComponent(provider)}`;
+    if (native) return nativeSessionRedirect(request, destination);
+    return Response.redirect(new URL(destination, request.url));
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Provider connection failed.";
+    if (native) return nativeAuthError(message);
     return Response.redirect(
       new URL(`/settings?error=${encodeURIComponent(message)}`, request.url),
     );

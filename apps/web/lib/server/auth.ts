@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
 import { betterAuth } from "better-auth";
+import { oneTimeToken } from "better-auth/plugins/one-time-token";
 
 import { composioEnabled } from "@/lib/mail/composio-core";
 import {
@@ -97,7 +98,38 @@ export const auth = betterAuth({
       "/sign-up/email": { window: 60, max: 5 },
     },
   },
+  plugins: [
+    oneTimeToken({
+      expiresIn: 3,
+      storeToken: "hashed",
+    }),
+  ],
 });
+
+export async function nativeSessionRedirect(
+  request: Request,
+  destination: string,
+) {
+  const result = await auth.api.generateOneTimeToken({
+    headers: request.headers,
+  });
+  const callback = new URL("rubidium://auth/complete");
+  callback.searchParams.set("token", result.token);
+  callback.searchParams.set("destination", destination);
+  return new Response(null, {
+    status: 302,
+    headers: { location: callback.toString() },
+  });
+}
+
+export function nativeAuthError(message: string) {
+  const callback = new URL("rubidium://auth/error");
+  callback.searchParams.set("message", message);
+  return new Response(null, {
+    status: 302,
+    headers: { location: callback.toString() },
+  });
+}
 
 let migrationPromise: Promise<void> | null = null;
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import AuthenticationServices
 import UIKit
 import WebKit
 
@@ -7,6 +8,7 @@ final class RubidiumBrowserModel: ObservableObject {
     @Published var isLoading = true
     @Published var progress = 0.08
     @Published var errorMessage: String?
+    @Published var isMailWorkspace = false
 
     weak var webView: WKWebView?
 
@@ -52,6 +54,23 @@ final class RubidiumBrowserModel: ObservableObject {
             return ""
         }
     }
+
+    func performWebCommand(_ command: RubidiumWebCommand) {
+        guard let webView else { return }
+        let selector: String
+        switch command {
+        case .search: selector = ".search-trigger"
+        case .compose: selector = ".compose-button"
+        }
+        webView.evaluateJavaScript(
+            "document.querySelector('\(selector)')?.click()"
+        )
+    }
+}
+
+enum RubidiumWebCommand {
+    case search
+    case compose
 }
 
 struct RubidiumWebView: UIViewRepresentable {
@@ -68,6 +87,7 @@ struct RubidiumWebView: UIViewRepresentable {
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.userContentController.add(context.coordinator, name: "rubidiumHaptics")
+        configuration.userContentController.add(context.coordinator, name: "rubidiumAuth")
         configuration.userContentController.addUserScript(
             WKUserScript(
                 source: Self.hapticBridgeScript,
@@ -79,7 +99,8 @@ struct RubidiumWebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
-        webView.allowsBackForwardNavigationGestures = true
+        // Horizontal gestures belong to Rubidium's mail actions, not browser history.
+        webView.allowsBackForwardNavigationGestures = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.scrollView.keyboardDismissMode = .interactive
         webView.scrollView.backgroundColor = UIColor(
@@ -140,9 +161,10 @@ struct RubidiumWebView: UIViewRepresentable {
     """
 
     @MainActor
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, ASWebAuthenticationPresentationContextProviding {
         private let model: RubidiumBrowserModel
         private var progressObservation: NSKeyValueObservation?
+        private var authenticationSession: ASWebAuthenticationSession?
 
         init(model: RubidiumBrowserModel) {
             self.model = model
@@ -166,6 +188,8 @@ struct RubidiumWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            applyNativeSafeArea(to: webView)
+            refreshPageContext(in: webView)
             model.progress = 1
             model.isLoading = false
             model.errorMessage = nil
@@ -183,8 +207,21 @@ struct RubidiumWebView: UIViewRepresentable {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
-            guard message.frameInfo.securityOrigin.host == "rbmail-production.up.railway.app",
-                  let cue = message.body as? String else { return }
+            guard message.frameInfo.securityOrigin.host == "rbmail-production.up.railway.app" else {
+                return
+            }
+            if message.name == "rubidiumAuth" {
+                guard let body = message.body as? [String: Any],
+                      let action = body["action"] as? String,
+                      let provider = body["provider"] as? String else { return }
+                beginAuthentication(
+                    action: action,
+                    provider: provider,
+                    token: body["token"] as? String
+                )
+                return
+            }
+            guard let cue = message.body as? String else { return }
             switch cue {
             case "selection": RubidiumHaptics.shared.play(.selection)
             case "action": RubidiumHaptics.shared.play(.action)
@@ -192,6 +229,140 @@ struct RubidiumWebView: UIViewRepresentable {
             case "success": RubidiumHaptics.shared.play(.success)
             case "error": RubidiumHaptics.shared.play(.error)
             default: break
+            }
+        }
+
+        func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+            if let window = model.webView?.window { return window }
+            return UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap(\.windows)
+                .first { $0.isKeyWindow } ?? ASPresentationAnchor()
+        }
+
+        private func beginAuthentication(action: String, provider: String, token: String?) {
+            guard ["google", "microsoft"].contains(provider) else { return }
+            let path: String
+            var queryItems: [URLQueryItem] = []
+            if action == "identity" {
+                path = "/api/auth/native/start/\(provider)"
+            } else if action == "connect", let token, !token.isEmpty {
+                path = "/api/auth/native/resume"
+                queryItems = [
+                    URLQueryItem(name: "provider", value: provider),
+                    URLQueryItem(name: "token", value: token),
+                ]
+            } else {
+                return
+            }
+            guard var components = URLComponents(
+                url: model.appURL.appendingPathComponent(path),
+                resolvingAgainstBaseURL: false
+            ) else { return }
+            components.queryItems = queryItems.isEmpty ? nil : queryItems
+            guard let url = components.url else { return }
+
+            let completion: ASWebAuthenticationSession.CompletionHandler = { [weak self] callbackURL, error in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.authenticationSession = nil
+                    if let error = error as? ASWebAuthenticationSessionError,
+                       error.code == .canceledLogin {
+                        self.model.isLoading = false
+                        return
+                    }
+                    guard let callbackURL else {
+                        self.model.errorMessage = error?.localizedDescription ?? "Authentication did not complete."
+                        self.model.isLoading = false
+                        RubidiumHaptics.shared.play(.error)
+                        return
+                    }
+                    self.handleAuthenticationCallback(callbackURL)
+                }
+            }
+
+            if #available(iOS 17.4, *) {
+                authenticationSession = ASWebAuthenticationSession(
+                    url: url,
+                    callback: .customScheme("rubidium"),
+                    completionHandler: completion
+                )
+            } else {
+                authenticationSession = ASWebAuthenticationSession(
+                    url: url,
+                    callbackURLScheme: "rubidium",
+                    completionHandler: completion
+                )
+            }
+            authenticationSession?.presentationContextProvider = self
+            authenticationSession?.prefersEphemeralWebBrowserSession = false
+            model.isLoading = true
+            if authenticationSession?.start() != true {
+                authenticationSession = nil
+                model.isLoading = false
+                model.errorMessage = "The secure sign-in window could not open."
+                RubidiumHaptics.shared.play(.error)
+            }
+        }
+
+        private func handleAuthenticationCallback(_ url: URL) {
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            let values = Dictionary(
+                uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+            )
+            if url.path == "/error" || url.host == "error" {
+                model.errorMessage = values["message"] ?? "Authentication failed."
+                model.isLoading = false
+                RubidiumHaptics.shared.play(.error)
+                return
+            }
+            guard let token = values["token"], !token.isEmpty,
+                  let webView = model.webView else {
+                model.errorMessage = "Rubidium received an invalid authentication response."
+                model.isLoading = false
+                RubidiumHaptics.shared.play(.error)
+                return
+            }
+            let destination = values["destination"]?.isEmpty == false
+                ? values["destination"]!
+                : "/"
+            guard let tokenData = try? JSONSerialization.data(withJSONObject: token),
+                  let destinationData = try? JSONSerialization.data(withJSONObject: destination),
+                  let tokenJSON = String(data: tokenData, encoding: .utf8),
+                  let destinationJSON = String(data: destinationData, encoding: .utf8) else { return }
+            let script = """
+            (async () => {
+              const response = await fetch('/api/auth/one-time-token/verify', {
+                method: 'POST',
+                headers: {'content-type': 'application/json'},
+                credentials: 'include',
+                body: JSON.stringify({token: \(tokenJSON)})
+              });
+              if (!response.ok) throw new Error('Session handoff failed');
+              location.assign(\(destinationJSON));
+            })().catch(error => location.assign('/settings?error=' + encodeURIComponent(error.message)));
+            """
+            webView.evaluateJavaScript(script)
+            RubidiumHaptics.shared.play(.success)
+        }
+
+        private func applyNativeSafeArea(to webView: WKWebView) {
+            let insets = webView.window?.safeAreaInsets ?? webView.safeAreaInsets
+            webView.evaluateJavaScript(
+                """
+                document.documentElement.style.setProperty('--rubidium-native-safe-top', '\(insets.top)px');
+                document.documentElement.style.setProperty('--rubidium-native-safe-right', '\(insets.right)px');
+                document.documentElement.style.setProperty('--rubidium-native-safe-bottom', '\(insets.bottom)px');
+                document.documentElement.style.setProperty('--rubidium-native-safe-left', '\(insets.left)px');
+                """
+            )
+        }
+
+        private func refreshPageContext(in webView: WKWebView) {
+            webView.evaluateJavaScript("Boolean(document.querySelector('.mail-stage'))") { [weak self] value, _ in
+                Task { @MainActor in
+                    self?.model.isMailWorkspace = value as? Bool ?? false
+                }
             }
         }
 

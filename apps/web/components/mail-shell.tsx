@@ -412,6 +412,9 @@ export function MailShell() {
   const [hydratingId, setHydratingId] = useState<string | null>(null);
   const [threadLoadError, setThreadLoadError] = useState("");
   const [swipedThreadId, setSwipedThreadId] = useState<string | null>(null);
+  const [swipeOffset, setSwipeOffset] = useState<{ id: string; x: number } | null>(
+    null,
+  );
   const [composeOpen, setComposeOpen] = useState(false);
   const [compose, setCompose] = useState({
     accountId: "",
@@ -813,6 +816,7 @@ export function MailShell() {
 
     const deltaX = touch.clientX - start.x;
     const deltaY = touch.clientY - start.y;
+    setSwipeOffset(null);
     if (Math.abs(deltaX) < 28 || Math.abs(deltaX) <= Math.abs(deltaY)) return;
 
     suppressThreadClick.current = id;
@@ -821,7 +825,68 @@ export function MailShell() {
         suppressThreadClick.current = null;
       }
     }, 300);
+    if (deltaX <= -72) {
+      archiveThread(id);
+      return;
+    }
+    if (deltaX >= 72) {
+      void toggleThreadRead(id);
+      return;
+    }
     setSwipedThreadId(deltaX < 0 ? id : null);
+  }
+
+  function moveThreadSwipe(
+    id: string,
+    event: ReactTouchEvent<HTMLButtonElement>,
+  ) {
+    const start = swipeStart.current;
+    const touch = event.touches[0];
+    if (!start || start.id !== id || !touch) return;
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (Math.abs(deltaX) <= Math.abs(deltaY)) return;
+    event.preventDefault();
+    const resisted = Math.sign(deltaX) * Math.min(104, Math.abs(deltaX) * 0.92);
+    setSwipeOffset({ id, x: resisted });
+  }
+
+  async function toggleThreadRead(id: string) {
+    const thread = threads.find((candidate) => candidate.id === id);
+    if (!thread) return;
+    const nextUnread = !thread.unread;
+    setSwipedThreadId(null);
+    setThreads((current) =>
+      current.map((candidate) =>
+        candidate.id === id ? { ...candidate, unread: nextUnread } : candidate,
+      ),
+    );
+    (
+      window as typeof window & {
+        webkit?: {
+          messageHandlers?: {
+            rubidiumHaptics?: { postMessage(cue: string): void };
+          };
+        };
+      }
+    ).webkit?.messageHandlers?.rubidiumHaptics?.postMessage("action");
+    if (!thread.remoteAccountId) return;
+    const response = await fetch(
+      `/api/threads/${encodeURIComponent(id)}/action`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: nextUnread ? "unread" : "read" }),
+      },
+    );
+    if (!response.ok) {
+      setThreads((current) =>
+        current.map((candidate) =>
+          candidate.id === id ? { ...candidate, unread: thread.unread } : candidate,
+        ),
+      );
+      setMailError("Read status could not be updated.");
+    }
   }
 
   async function chooseThread(id: string) {
@@ -1309,6 +1374,14 @@ export function MailShell() {
                         "--row-delay": `${Math.min(animationIndex, 6) * 22}ms`,
                       } as CSSProperties}
                     >
+                      <div className="swipe-action swipe-read" aria-hidden="true">
+                        <Mail size={18} />
+                        <span>{thread.unread ? "Read" : "Unread"}</span>
+                      </div>
+                      <div className="swipe-action swipe-archive" aria-hidden="true">
+                        <Archive size={18} />
+                        <span>Archive</span>
+                      </div>
                       <button
                         className={`thread-row ${
                           selected?.id === thread.id ? "selected" : ""
@@ -1326,9 +1399,20 @@ export function MailShell() {
                         onTouchEnd={(event) =>
                           finishThreadSwipe(thread.id, event)
                         }
+                        onTouchMove={(event) =>
+                          moveThreadSwipe(thread.id, event)
+                        }
                         onTouchCancel={() => {
                           swipeStart.current = null;
+                          setSwipeOffset(null);
                         }}
+                        style={
+                          swipeOffset?.id === thread.id
+                            ? ({
+                                "--swipe-offset": `${swipeOffset.x}px`,
+                              } as CSSProperties)
+                            : undefined
+                        }
                       >
                         <span
                           className="avatar"

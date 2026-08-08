@@ -16,12 +16,12 @@ struct RubidiumRootView: View {
             RubidiumWebView(model: browser)
                 .ignoresSafeArea()
 
-            if !isKeyboardVisible {
+            if !isKeyboardVisible && browser.isMailWorkspace {
                 VStack {
                     Spacer()
                     HStack {
                         Spacer()
-                        intelligenceControl
+                        controlPlane
                     }
                     .padding(.trailing, 12)
                     .padding(.bottom, 14)
@@ -85,13 +85,49 @@ struct RubidiumRootView: View {
     }
 
     @ViewBuilder
-    private var intelligenceControl: some View {
+    private var controlPlane: some View {
         if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 12) {
-                intelligenceButton
+            GlassEffectContainer(spacing: 10) {
+                HStack(spacing: 8) {
+                    webCommandButton(.search, symbol: "magnifyingglass", label: "Search mail")
+                    webCommandButton(.compose, symbol: "square.and.pencil", label: "New message")
+                    intelligenceButton
+                }
             }
         } else {
-            intelligenceButton
+            HStack(spacing: 8) {
+                webCommandButton(.search, symbol: "magnifyingglass", label: "Search mail")
+                webCommandButton(.compose, symbol: "square.and.pencil", label: "New message")
+                intelligenceButton
+            }
+            .padding(6)
+            .rubidiumGlass(cornerRadius: 28)
+        }
+    }
+
+    @ViewBuilder
+    private func webCommandButton(
+        _ command: RubidiumWebCommand,
+        symbol: String,
+        label: String
+    ) -> some View {
+        let button = Button {
+            RubidiumHaptics.shared.play(.selection)
+            browser.performWebCommand(command)
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .accessibilityLabel(label)
+
+        if #available(iOS 26.0, *) {
+            button
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+        } else {
+            button.buttonStyle(.plain)
         }
     }
 

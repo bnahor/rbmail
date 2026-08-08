@@ -13,6 +13,22 @@
   --radius-app: 23px;
   --radius-panel: 17px;
   --spring: cubic-bezier(0.2, 0.85, 0.25, 1);
+  --rubidium-safe-top: max(
+    env(safe-area-inset-top),
+    var(--rubidium-native-safe-top, 0px)
+  );
+  --rubidium-safe-right: max(
+    env(safe-area-inset-right),
+    var(--rubidium-native-safe-right, 0px)
+  );
+  --rubidium-safe-bottom: max(
+    env(safe-area-inset-bottom),
+    var(--rubidium-native-safe-bottom, 0px)
+  );
+  --rubidium-safe-left: max(
+    env(safe-area-inset-left),
+    var(--rubidium-native-safe-left, 0px)
+  );
 }
 
 * {
@@ -604,7 +620,7 @@ textarea:focus-visible {
   justify-content: center;
   gap: 6px;
   color: #fff;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 760;
 }
 
@@ -1646,7 +1662,7 @@ textarea:focus-visible {
   }
 
   .inbox-header {
-    padding: max(16px, env(safe-area-inset-top)) 15px 12px;
+    padding: max(16px, var(--rubidium-safe-top)) 15px 12px;
   }
 
   .inbox-title-row {
@@ -1690,7 +1706,7 @@ textarea:focus-visible {
   }
 
   .thread-list {
-    padding-bottom: calc(76px + env(safe-area-inset-bottom));
+    padding-bottom: calc(76px + var(--rubidium-safe-bottom));
   }
 
   .thread-swipe-wrap {
@@ -1746,7 +1762,7 @@ textarea:focus-visible {
     min-height: 74px;
     gap: 4px;
     padding:
-      max(8px, env(safe-area-inset-top))
+      max(8px, var(--rubidium-safe-top))
       8px
       8px;
   }
@@ -1800,7 +1816,7 @@ textarea:focus-visible {
     padding:
       8px
       9px
-      max(9px, env(safe-area-inset-bottom));
+      max(9px, var(--rubidium-safe-bottom));
   }
 
   .reply-box textarea {
@@ -1828,12 +1844,12 @@ textarea:focus-visible {
     bottom: 0;
     left: 0;
     display: grid;
-    min-height: calc(63px + env(safe-area-inset-bottom));
+    min-height: calc(63px + var(--rubidium-safe-bottom));
     grid-template-columns: repeat(5, 1fr);
     align-items: start;
     border-top: 1px solid var(--line);
     background: rgba(250, 249, 245, 0.94);
-    padding: 7px 6px env(safe-area-inset-bottom);
+    padding: 7px 6px var(--rubidium-safe-bottom);
     backdrop-filter: blur(20px);
   }
 
@@ -1901,7 +1917,7 @@ textarea:focus-visible {
   }
 
   .search-command > footer {
-    padding-bottom: env(safe-area-inset-bottom);
+    padding-bottom: var(--rubidium-safe-bottom);
   }
 
   .search-command > footer span:first-child {
@@ -3444,23 +3460,23 @@ textarea:focus-visible {
 @media (max-width: 720px) {
   .settings-stage {
     padding:
-      calc(env(safe-area-inset-top) + 18px)
+      calc(var(--rubidium-safe-top) + 18px)
       14px
-      calc(env(safe-area-inset-bottom) + 20px);
+      calc(var(--rubidium-safe-bottom) + 20px);
   }
 
   .auth-stage {
     overflow: hidden;
     padding:
-      max(14px, env(safe-area-inset-top))
+      max(14px, var(--rubidium-safe-top))
       14px
-      max(14px, env(safe-area-inset-bottom));
+      max(14px, var(--rubidium-safe-bottom));
   }
 
   .auth-shell {
     width: min(520px, 100%);
     height: calc(
-      100dvh - 28px - env(safe-area-inset-top) - env(safe-area-inset-bottom)
+      100dvh - 28px - var(--rubidium-safe-top) - var(--rubidium-safe-bottom)
     );
     min-height: 0;
     grid-template-columns: 1fr;
@@ -4016,6 +4032,8 @@ textarea:focus-visible {
   transition:
     background 120ms ease,
     transform 220ms var(--spring);
+  transform: translateX(var(--swipe-offset, 0px));
+  will-change: transform;
 }
 
 .mail-stage .thread-row:hover,
@@ -4112,7 +4130,7 @@ textarea:focus-visible {
 }
 
 .mail-stage .thread-swipe-wrap.swiped .thread-row {
-  transform: translateX(-58px);
+  --swipe-offset: -58px;
 }
 
 .mail-stage .row-action-rail .icon-button {
@@ -4638,8 +4656,8 @@ textarea:focus-visible {
     inset: 0 auto 0 0;
     width: min(286px, 86vw);
     transform: translateX(-102%);
-    padding-top: calc(env(safe-area-inset-top) + 12px);
-    padding-bottom: calc(env(safe-area-inset-bottom) + 12px);
+    padding-top: calc(var(--rubidium-safe-top) + 12px);
+    padding-bottom: calc(var(--rubidium-safe-bottom) + 12px);
     transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
@@ -4669,9 +4687,10 @@ textarea:focus-visible {
 
   .mail-stage .inbox-header {
     padding:
-      calc(env(safe-area-inset-top) + 10px)
-      16px
+      calc(var(--rubidium-safe-top) + 10px)
+      calc(var(--rubidium-safe-right) + 16px)
       13px;
+    padding-left: calc(var(--rubidium-safe-left) + 16px);
   }
 
   .mail-stage .inbox-title-row {
@@ -4749,12 +4768,13 @@ textarea:focus-visible {
   }
 
   .mail-stage .thread-header {
-    min-height: calc(env(safe-area-inset-top) + 72px);
+    min-height: calc(var(--rubidium-safe-top) + 72px);
     gap: 6px;
     padding:
-      calc(env(safe-area-inset-top) + 8px)
-      9px
+      calc(var(--rubidium-safe-top) + 8px)
+      calc(var(--rubidium-safe-right) + 9px)
       8px;
+    padding-left: calc(var(--rubidium-safe-left) + 9px);
   }
 
   .mail-stage .thread-heading {
@@ -4800,7 +4820,7 @@ textarea:focus-visible {
       6px
       68px
       calc(
-        max(7px, env(safe-area-inset-bottom)) +
+        max(7px, var(--rubidium-safe-bottom)) +
         var(--rubidium-keyboard-overlap, 0px)
       )
       8px;
@@ -4882,22 +4902,22 @@ textarea:focus-visible {
   .mail-stage .search-layer,
   .mail-stage .compose-layer {
     padding:
-      max(10px, env(safe-area-inset-top))
+      max(10px, var(--rubidium-safe-top))
       10px
-      max(10px, env(safe-area-inset-bottom));
+      max(10px, var(--rubidium-safe-bottom));
   }
 
   .mail-stage .search-layer {
     align-items: flex-end;
     padding:
-      calc(env(safe-area-inset-top) + 8px)
+      calc(var(--rubidium-safe-top) + 8px)
       0
       0;
   }
 
   .mail-stage .search-command {
     width: 100%;
-    max-height: calc(100dvh - env(safe-area-inset-top) - 8px);
+    max-height: calc(100dvh - var(--rubidium-safe-top) - 8px);
     border-width: 1px 0 0;
     border-radius: 24px 24px 0 0;
   }
@@ -4924,7 +4944,7 @@ textarea:focus-visible {
 
   .mail-stage .search-command > footer {
     padding-bottom: calc(
-      env(safe-area-inset-bottom) + 8px +
+      var(--rubidium-safe-bottom) + 8px +
       var(--rubidium-keyboard-overlap, 0px)
     );
   }
@@ -4932,7 +4952,7 @@ textarea:focus-visible {
   .mail-stage .search-command,
   .mail-stage .compose-modal {
     max-height: calc(
-      100dvh - 20px - env(safe-area-inset-top) - env(safe-area-inset-bottom)
+      100dvh - 20px - var(--rubidium-safe-top) - var(--rubidium-safe-bottom)
     );
     border-radius: 13px;
   }
@@ -4949,7 +4969,7 @@ textarea:focus-visible {
   /* Keep search as a bottom sheet after the shared modal rules above. */
   .mail-stage .search-command {
     width: 100%;
-    max-height: calc(100dvh - env(safe-area-inset-top) - 8px);
+    max-height: calc(100dvh - var(--rubidium-safe-top) - 8px);
     border-width: 1px 0 0;
     border-radius: 24px 24px 0 0;
   }
@@ -4976,7 +4996,7 @@ textarea:focus-visible {
   }
 
   .mail-stage .calendar-event-list {
-    padding-bottom: calc(84px + env(safe-area-inset-bottom));
+    padding-bottom: calc(84px + var(--rubidium-safe-bottom));
   }
 }
 

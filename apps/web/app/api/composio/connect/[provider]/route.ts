@@ -21,9 +21,11 @@ export async function GET(
     );
   }
   try {
+    const native = new URL(request.url).searchParams.get("native") === "1";
     const url = await startComposioConnection(
       candidate as Provider,
       user.id,
+      native,
     );
     return Response.redirect(url);
   } catch (error) {

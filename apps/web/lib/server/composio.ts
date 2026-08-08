@@ -61,6 +61,7 @@ export function composioConfigured() {
 export async function startComposioConnection(
   provider: Provider,
   userId: string,
+  native = false,
 ) {
   const state = randomBytes(32).toString("base64url");
   const toolkit = composioToolkit(provider);
@@ -75,7 +76,7 @@ export async function startComposioConnection(
     },
   });
   const request = await session.authorize(toolkit, {
-    callbackUrl: `${appUrl()}/api/composio/callback?state=${encodeURIComponent(state)}`,
+    callbackUrl: `${appUrl()}/api/composio/callback?state=${encodeURIComponent(state)}${native ? "&native=1" : ""}`,
   });
   if (!request.redirectUrl) {
     throw new Error(`Composio did not return a ${toolkit} connection link.`);

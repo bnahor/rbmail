@@ -42,9 +42,14 @@ struct RubidiumIntelligenceButton: View {
     var body: some View {
         if #available(iOS 26.0, *) {
             button
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
-                .tint(Color(red: 0.86, green: 0.05, blue: 0.11))
+                .glassEffect(
+                    .regular
+                        .tint(Color(red: 0.86, green: 0.05, blue: 0.11).opacity(0.72))
+                        .interactive(),
+                    in: Circle()
+                )
                 .glassEffectID("rubidium-intelligence", in: namespace)
                 .glassEffectTransition(.materialize)
         } else {
