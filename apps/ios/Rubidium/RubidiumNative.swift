@@ -106,9 +106,12 @@ final class RubidiumNativeStore: ObservableObject {
     @Published var isLoading = false
     @Published var isSyncingCalendar = false
     @Published var errorMessage: String?
+    @Published var accountsErrorMessage: String?
+    @Published var calendarErrorMessage: String?
 
     private weak var browser: RubidiumBrowserModel?
     private var hasLoaded = false
+    private var lastCalendarRefreshAttempt: Date?
 
     func attach(_ browser: RubidiumBrowserModel) {
         self.browser = browser
@@ -118,24 +121,35 @@ final class RubidiumNativeStore: ObservableObject {
         guard let browser, force || !hasLoaded else { return }
         isLoading = true
         errorMessage = nil
+        accountsErrorMessage = nil
+        calendarErrorMessage = nil
+
         do {
-            async let threadsResponse: RubidiumThreadsResponse = browser.api("/api/threads?limit=250")
-            async let accountsResponse: RubidiumAccountsResponse = browser.api("/api/accounts")
-            async let sourcesResponse: RubidiumSourcesResponse = browser.api("/api/calendar/sources")
-            let (threadPayload, accountPayload, sourcePayload) = try await (
-                threadsResponse,
-                accountsResponse,
-                sourcesResponse
-            )
-            threads = threadPayload.threads
-            accounts = accountPayload.accounts
-            sources = sourcePayload.sources
+            let payload: RubidiumAccountsResponse = try await browser.api("/api/accounts")
+            accounts = payload.accounts
+        } catch {
+            accountsErrorMessage = error.localizedDescription
+        }
+
+        do {
+            let payload: RubidiumSourcesResponse = try await browser.api("/api/calendar/sources")
+            sources = payload.sources
             try await loadCalendarEvents()
-            hasLoaded = true
+        } catch {
+            calendarErrorMessage = error.localizedDescription
+        }
+
+        // Calendar and account navigation should become usable before the
+        // larger native search index is decoded.
+        isLoading = false
+
+        do {
+            let payload: RubidiumThreadsResponse = try await browser.api("/api/threads?limit=120")
+            threads = payload.threads
         } catch {
             errorMessage = error.localizedDescription
         }
-        isLoading = false
+        hasLoaded = true
     }
 
     func loadCalendarEvents(query: String? = nil) async throws {
@@ -159,7 +173,8 @@ final class RubidiumNativeStore: ObservableObject {
     func syncCalendar() async {
         guard let browser else { return }
         isSyncingCalendar = true
-        errorMessage = nil
+        calendarErrorMessage = nil
+        lastCalendarRefreshAttempt = Date()
         do {
             let _: RubidiumSyncResponse = try await browser.api(
                 "/api/calendar/sync",
@@ -173,7 +188,7 @@ final class RubidiumNativeStore: ObservableObject {
             try await loadCalendarEvents()
             RubidiumHaptics.shared.play(.success)
         } catch {
-            errorMessage = error.localizedDescription
+            calendarErrorMessage = error.localizedDescription
             RubidiumHaptics.shared.play(.error)
         }
         isSyncingCalendar = false
@@ -182,6 +197,20 @@ final class RubidiumNativeStore: ObservableObject {
     func reloadAfterConnection() async {
         hasLoaded = false
         await loadAll(force: true)
+        await prepareCalendar()
+    }
+
+    func prepareCalendar() async {
+        guard !isSyncingCalendar else { return }
+        if let lastCalendarRefreshAttempt,
+           Date().timeIntervalSince(lastCalendarRefreshAttempt) < 90 {
+            return
+        }
+        let newestSync = sources.compactMap(\.lastSyncAt).max().map { Date(timeIntervalSince1970: $0 / 1_000) }
+        let stale = newestSync.map { Date().timeIntervalSince($0) > 15 * 60 } ?? true
+        if sources.isEmpty || events.isEmpty || stale {
+            await syncCalendar()
+        }
     }
 
     var accountsNeedingCalendarAccess: [RubidiumAccount] {
@@ -199,28 +228,27 @@ enum RubidiumNativeTab: Hashable {
 struct RubidiumNativeShell: View {
     @ObservedObject var browser: RubidiumBrowserModel
     @ObservedObject var store: RubidiumNativeStore
+    @ObservedObject var security: RubidiumAppLockModel
     @Binding var selection: RubidiumNativeTab
     let mail: AnyView
     let intelligence: AnyView
 
     var body: some View {
-        TabView(selection: $selection) {
-            ZStack(alignment: .bottomTrailing) {
-                mail
-                    // WKWebView does not automatically adopt SwiftUI's
-                    // scroll-edge underlap. Extend only the mail surface
-                    // behind the glass bar; accessory controls remain above.
-                    .ignoresSafeArea(.container, edges: .bottom)
-                intelligence
-                    .padding(.trailing, 14)
-                    .padding(.bottom, 12)
-            }
-            .tag(RubidiumNativeTab.mail)
-            .tabItem { Label("Mail", systemImage: "tray") }
+        GeometryReader { geometry in
+            ZStack(alignment: .bottom) {
+            // Keep the WebKit session alive while native destinations are
+            // visible; it owns the secure first-party cookie used by the
+            // provider-neutral native API client.
+            mail
+                .ignoresSafeArea(.container, edges: .bottom)
+                .opacity(selection == .mail ? 1 : 0)
+                .allowsHitTesting(selection == .mail)
+                .accessibilityHidden(selection != .mail)
 
             RubidiumNativeCalendarView(store: store, browser: browser)
-                .tag(RubidiumNativeTab.today)
-                .tabItem { Label("Today", systemImage: "calendar") }
+                .opacity(selection == .today ? 1 : 0)
+                .allowsHitTesting(selection == .today)
+                .accessibilityHidden(selection != .today)
 
             RubidiumNativeSearchView(store: store) { thread in
                 RubidiumHaptics.shared.play(.selection)
@@ -229,22 +257,106 @@ struct RubidiumNativeShell: View {
                     browser.openThread(thread.id)
                 }
             }
-            .tag(RubidiumNativeTab.search)
-            .tabItem { Label("Search", systemImage: "magnifyingglass") }
+            .opacity(selection == .search ? 1 : 0)
+            .allowsHitTesting(selection == .search)
+            .accessibilityHidden(selection != .search)
 
-            RubidiumNativeAccountsView(store: store, browser: browser)
-                .tag(RubidiumNativeTab.accounts)
-                .tabItem { Label("Accounts", systemImage: "person.crop.circle") }
+            RubidiumNativeAccountsView(store: store, browser: browser, security: security)
+                .opacity(selection == .accounts ? 1 : 0)
+                .allowsHitTesting(selection == .accounts)
+                .accessibilityHidden(selection != .accounts)
+
+            RubidiumNativeNavigationBar(
+                selection: $selection,
+                intelligence: intelligence
+            )
+            .padding(.horizontal, 12)
+            .padding(.bottom, geometry.safeAreaInsets.bottom + 6)
+            .zIndex(50)
+            }
         }
-        .tint(.primary)
-        // iOS 26's floating Liquid Glass tab bar should sit over the app
-        // surface. Hiding the legacy toolbar backing prevents a second,
-        // opaque strip from appearing below the glass plane.
-        .toolbarBackground(.hidden, for: .tabBar)
-        .background(
-            Color(red: 0.949, green: 0.937, blue: 0.91)
-                .ignoresSafeArea()
-        )
+        // Let mail and native lists visually continue behind the home
+        // indicator. The control plane keeps its own measured safe padding.
+        .ignoresSafeArea(.container, edges: .bottom)
+        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+    }
+}
+
+private struct RubidiumNativeNavigationBar: View {
+    @Binding var selection: RubidiumNativeTab
+    let intelligence: AnyView
+    @Namespace private var navigationNamespace
+
+    var body: some View {
+        HStack(spacing: 2) {
+            destination(.mail, title: "Mail", symbol: "tray", selectedSymbol: "tray.full.fill")
+            destination(.today, title: "Today", symbol: "calendar", selectedSymbol: "calendar")
+
+            VStack(spacing: 1) {
+                intelligence
+                    .frame(width: 44, height: 34)
+                Text("AI")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 52)
+
+            destination(
+                .search,
+                title: "Search",
+                symbol: "magnifyingglass",
+                selectedSymbol: "magnifyingglass.circle.fill"
+            )
+            destination(
+                .accounts,
+                title: "Settings",
+                symbol: "gearshape",
+                selectedSymbol: "gearshape.fill"
+            )
+        }
+        .padding(5)
+        .frame(maxWidth: 460)
+        .rubidiumGlass(cornerRadius: 27, interactive: true)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func destination(
+        _ tab: RubidiumNativeTab,
+        title: String,
+        symbol: String,
+        selectedSymbol: String
+    ) -> some View {
+        Button {
+            guard selection != tab else { return }
+            withAnimation(.smooth(duration: 0.24, extraBounce: 0.02)) {
+                selection = tab
+            }
+        } label: {
+            VStack(spacing: 2) {
+                Image(systemName: selection == tab ? selectedSymbol : symbol)
+                    .contentTransition(.symbolEffect(.replace))
+                    .font(.system(size: 17, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 10, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(selection == tab ? Color.primary : Color.secondary)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .contentShape(Rectangle())
+            .background {
+                if selection == tab {
+                    Capsule(style: .continuous)
+                        .fill(.primary.opacity(0.1))
+                        .matchedGeometryEffect(
+                            id: "native-navigation-selection",
+                            in: navigationNamespace
+                        )
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(selection == tab ? .isSelected : [])
     }
 }
 
@@ -397,7 +509,7 @@ struct RubidiumNativeCalendarView: View {
                     .refreshable { await store.syncCalendar() }
                 } else {
                     List {
-                        if let error = store.errorMessage {
+                        if let error = store.calendarErrorMessage {
                             Section {
                                 Label(error, systemImage: "exclamationmark.triangle")
                                     .font(.footnote)
@@ -407,7 +519,11 @@ struct RubidiumNativeCalendarView: View {
                         ForEach(groupedEvents, id: \.0) { day, events in
                             Section(day) {
                                 ForEach(events) { event in
-                                    RubidiumCalendarEventRow(event: event)
+                                    NavigationLink {
+                                        RubidiumCalendarEventDetailView(event: event)
+                                    } label: {
+                                        RubidiumCalendarEventRow(event: event)
+                                    }
                                 }
                             }
                         }
@@ -417,6 +533,9 @@ struct RubidiumNativeCalendarView: View {
                 }
             }
             .navigationTitle("Today")
+            .task {
+                await store.prepareCalendar()
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -440,7 +559,7 @@ struct RubidiumNativeCalendarView: View {
         if !store.accountsNeedingCalendarAccess.isEmpty {
             return "Reconnect the accounts below once to grant Calendar access."
         }
-        return store.errorMessage ?? "No upcoming events in your connected calendars."
+        return store.calendarErrorMessage ?? "No upcoming events in your connected calendars."
     }
 
     @ViewBuilder
@@ -520,9 +639,78 @@ struct RubidiumCalendarEventRow: View {
     }
 }
 
+struct RubidiumCalendarEventDetailView: View {
+    let event: RubidiumCalendarEvent
+
+    var body: some View {
+        List {
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(event.title)
+                        .font(.title2.weight(.bold))
+                    Label(dateLabel, systemImage: "calendar")
+                        .foregroundStyle(.secondary)
+                    Label(timeLabel, systemImage: "clock")
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 6)
+            }
+
+            if !event.location.isEmpty || event.joinUrl != nil {
+                Section("Where") {
+                    if !event.location.isEmpty {
+                        Label(event.location, systemImage: "mappin.and.ellipse")
+                    }
+                    if let value = event.joinUrl, let url = URL(string: value) {
+                        Link(destination: url) {
+                            Label(
+                                event.provider == "google" ? "Join Google Meet" : "Join Microsoft Teams",
+                                systemImage: "video.fill"
+                            )
+                        }
+                    }
+                }
+            }
+
+            Section("Calendar") {
+                LabeledContent("Calendar", value: event.calendarName)
+                LabeledContent("Account", value: event.accountEmail)
+                LabeledContent("Response", value: responseLabel)
+                LabeledContent("Provider", value: event.provider == "google" ? "Google" : "Microsoft")
+            }
+        }
+        .navigationTitle("Event")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var dateLabel: String {
+        guard let start = RubidiumDate.parse(event.start) else { return event.start }
+        return start.formatted(date: .complete, time: .omitted)
+    }
+
+    private var timeLabel: String {
+        if event.allDay { return "All day" }
+        guard let start = RubidiumDate.parse(event.start),
+              let end = RubidiumDate.parse(event.end) else { return "" }
+        return "\(start.formatted(date: .omitted, time: .shortened))–\(end.formatted(date: .omitted, time: .shortened))"
+    }
+
+    private var responseLabel: String {
+        switch event.responseStatus.lowercased() {
+        case "accepted": "Accepted"
+        case "declined": "Declined"
+        case "tentative": "Maybe"
+        case "needsaction", "none", "notresponded": "Awaiting response"
+        default: event.responseStatus.capitalized
+        }
+    }
+}
+
 struct RubidiumNativeAccountsView: View {
     @ObservedObject var store: RubidiumNativeStore
     @ObservedObject var browser: RubidiumBrowserModel
+    @ObservedObject var security: RubidiumAppLockModel
+    @AppStorage(RubidiumAppearance.storageKey) private var appearanceRaw = RubidiumAppearance.system.rawValue
 
     var body: some View {
         NavigationStack {
@@ -542,7 +730,41 @@ struct RubidiumNativeAccountsView: View {
                     }
                 }
 
-                if let error = store.errorMessage {
+                Section("Appearance") {
+                    Picker("Theme", selection: $appearanceRaw) {
+                        ForEach(RubidiumAppearance.allCases) { appearance in
+                            Text(appearance.title).tag(appearance.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                Section("Privacy") {
+                    Toggle(
+                        "Require \(security.authenticationLabel)",
+                        isOn: Binding(
+                            get: { security.isEnabled },
+                            set: { enabled in
+                                Task { await security.setEnabled(enabled) }
+                            }
+                        )
+                    )
+                    .disabled(security.isAuthenticating)
+
+                    if security.isEnabled {
+                        Button("Lock now", systemImage: "lock.fill") {
+                            security.lock()
+                        }
+                    }
+
+                    if let error = security.errorMessage {
+                        Text(error)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                if let error = store.accountsErrorMessage ?? browser.errorMessage {
                     Section {
                         Label(error, systemImage: "exclamationmark.triangle")
                             .font(.footnote)
@@ -550,7 +772,7 @@ struct RubidiumNativeAccountsView: View {
                     }
                 }
             }
-            .navigationTitle("Accounts")
+            .navigationTitle("Settings")
             .refreshable { await store.reloadAfterConnection() }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -638,6 +860,7 @@ private struct RubidiumAccountRow: View {
 
 struct RubidiumNativeSignInView: View {
     @ObservedObject var browser: RubidiumBrowserModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var email = ""
     @State private var password = ""
     @State private var createAccount = false
@@ -648,11 +871,7 @@ struct RubidiumNativeSignInView: View {
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [
-                    Color(red: 0.95, green: 0.94, blue: 0.91),
-                    Color(red: 0.97, green: 0.94, blue: 0.91),
-                    Color.red.opacity(0.08),
-                ],
+                colors: backgroundColors,
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -662,13 +881,7 @@ struct RubidiumNativeSignInView: View {
                 VStack(alignment: .leading, spacing: 26) {
                     Spacer(minLength: 26)
                     HStack(spacing: 12) {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color(red: 0.93, green: 0.13, blue: 0.12))
-                            .frame(width: 52, height: 52)
-                            .overlay {
-                                Image(systemName: "diamond.fill")
-                                    .foregroundStyle(.white)
-                            }
+                        RubidiumBrandMark(size: 52, cornerRadius: 14)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Rubidium")
                                 .font(.title3.weight(.bold))
@@ -806,6 +1019,21 @@ struct RubidiumNativeSignInView: View {
             .rubidiumContentPanel(cornerRadius: 18)
         }
         .buttonStyle(.plain)
+    }
+
+    private var backgroundColors: [Color] {
+        if colorScheme == .dark {
+            return [
+                Color(red: 0.055, green: 0.058, blue: 0.052),
+                Color(red: 0.085, green: 0.075, blue: 0.067),
+                Color.red.opacity(0.12),
+            ]
+        }
+        return [
+            Color(red: 0.95, green: 0.94, blue: 0.91),
+            Color(red: 0.97, green: 0.94, blue: 0.91),
+            Color.red.opacity(0.08),
+        ]
     }
 
     private func authenticateWithPassword() {

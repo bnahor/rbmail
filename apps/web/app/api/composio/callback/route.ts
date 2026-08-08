@@ -6,6 +6,7 @@ import {
 import { syncAccountCalendars } from "@/lib/server/calendar";
 import { completeComposioConnection } from "@/lib/server/composio";
 import { syncAccount } from "@/lib/server/sync";
+import { after } from "next/server";
 
 export const runtime = "nodejs";
 
@@ -29,10 +30,12 @@ export async function GET(request: Request) {
   }
   try {
     const account = await completeComposioConnection(state, user.id);
-    await Promise.allSettled([
-      syncAccount(account.id, 2),
-      syncAccountCalendars(account.id),
-    ]);
+    after(async () => {
+      await Promise.allSettled([
+        syncAccount(account.id, 2),
+        syncAccountCalendars(account.id),
+      ]);
+    });
     const destination = `/settings?connected=${account.provider}`;
     if (native) return nativeSessionRedirect(request, destination);
     return Response.redirect(new URL(destination, request.url));

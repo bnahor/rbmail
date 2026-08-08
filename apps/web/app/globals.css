@@ -3640,6 +3640,136 @@ textarea:focus-visible {
   }
 }
 
+/* Native appearance bridge. SwiftUI writes this attribute into the shared
+   WKWebView so the mail surface follows System/Light/Dark without flashing a
+   second palette during tab changes. Rich email iframes keep their authored
+   color scheme for readability. */
+html[data-rubidium-theme="dark"] {
+  color-scheme: dark;
+  --ink: #f2f2ee;
+  --ink-soft: #b2b4af;
+  --ink-faint: #858883;
+  --paper: #181917;
+  --paper-warm: #111210;
+  --paper-deep: #272825;
+  --line: rgba(255, 255, 255, 0.1);
+  --line-strong: rgba(255, 255, 255, 0.17);
+  background: #111210;
+}
+
+html[data-rubidium-theme="dark"] .mail-stage,
+html[data-rubidium-theme="dark"] .mail-app {
+  background: #111210;
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .inbox-panel {
+  border-color: #31322f;
+  background: #191a18;
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .inbox-header,
+html[data-rubidium-theme="dark"] .mail-stage .list-toolbar,
+html[data-rubidium-theme="dark"] .mail-stage .thread-group-label {
+  border-color: #31322f;
+  background: #191a18;
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .all-account-pill,
+html[data-rubidium-theme="dark"] .mail-stage .search-trigger,
+html[data-rubidium-theme="dark"] .mail-stage .participant-chips span,
+html[data-rubidium-theme="dark"] .mail-stage .thread-load-error button {
+  border-color: #393a37;
+  background: #242522;
+  color: #c7c9c5;
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .thread-swipe-wrap {
+  border-color: #30312e;
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .thread-row {
+  background: #1b1c1a;
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .thread-row:hover,
+html[data-rubidium-theme="dark"] .mail-stage .thread-row.selected,
+html[data-rubidium-theme="dark"] .mail-stage .thread-row:active {
+  background: #242522;
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .thread-meta strong,
+html[data-rubidium-theme="dark"] .mail-stage .thread-subject,
+html[data-rubidium-theme="dark"] .mail-stage .thread-heading h2,
+html[data-rubidium-theme="dark"] .mail-stage .message-card header strong {
+  color: #f2f2ee;
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .thread-preview,
+html[data-rubidium-theme="dark"] .mail-stage .thread-meta time,
+html[data-rubidium-theme="dark"] .mail-stage .today-label,
+html[data-rubidium-theme="dark"] .mail-stage .list-toolbar > span,
+html[data-rubidium-theme="dark"] .mail-stage .thread-group-label,
+html[data-rubidium-theme="dark"] .mail-stage .conversation-kicker,
+html[data-rubidium-theme="dark"] .mail-stage .conversation-date,
+html[data-rubidium-theme="dark"] .mail-stage .message-card header small,
+html[data-rubidium-theme="dark"] .mail-stage .message-card header time {
+  color: #929590;
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .thread-panel,
+html[data-rubidium-theme="dark"] .mail-stage .thread-header {
+  border-color: #30312e;
+  background: #151614;
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .message-card,
+html[data-rubidium-theme="dark"] .mail-stage .message-card.outgoing {
+  border-color: #30312e;
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .mini-avatar {
+  background: #2b2c29;
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .message-body {
+  color: #e6e7e2;
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .reply-dock {
+  background: linear-gradient(transparent, #151614 14%);
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .reply-box {
+  border-color: #3b3c38;
+  background: #20211f;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.28);
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .replying-as {
+  border-color: #3b3c38;
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .search-scrim,
+html[data-rubidium-theme="dark"] .mail-stage .compose-layer {
+  background: rgba(0, 0, 0, 0.62);
+}
+
+html[data-rubidium-theme="dark"] .mail-stage .search-command,
+html[data-rubidium-theme="dark"] .mail-stage .compose-modal,
+html[data-rubidium-theme="dark"] .mail-stage .calendar-compose {
+  border-color: #3b3c38;
+  background: #1c1d1b;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.52);
+}
+
+html[data-rubidium-theme="dark"] .mail-stage input,
+html[data-rubidium-theme="dark"] .mail-stage textarea,
+html[data-rubidium-theme="dark"] .mail-stage select {
+  border-color: #3b3c38;
+  background: #232421;
+  color: #f2f2ee;
+}
+
 @media (max-width: 420px) {
   .auth-shell {
     grid-template-rows: 64px minmax(0, 1fr);
@@ -5023,5 +5153,36 @@ textarea:focus-visible {
 
   .unlock-card input {
     height: 42px;
+  }
+}
+
+/* In the iOS app, SwiftUI owns every top-level destination. The embedded
+   mailbox is deliberately reduced to mail content so it cannot surface a
+   second drawer, settings route, or bottom navigation plane. */
+@media (max-width: 699px) {
+  html[data-rubidium-native="true"] .mail-stage .sidebar,
+  html[data-rubidium-native="true"] .mail-stage .menu-scrim,
+  html[data-rubidium-native="true"] .mail-stage .inbox-title-row > .mobile-only,
+  html[data-rubidium-native="true"] .mail-stage .mobile-tabbar {
+    display: none !important;
+  }
+
+  html[data-rubidium-native="true"] .mail-stage .inbox-title-row {
+    gap: 10px;
+  }
+
+  html[data-rubidium-native="true"] .mail-stage .thread-list,
+  html[data-rubidium-native="true"] .mail-stage .calendar-event-list {
+    padding-bottom: calc(100px + var(--rubidium-safe-bottom));
+  }
+
+  html[data-rubidium-native="true"] .mail-stage .reply-dock {
+    padding-bottom: calc(
+      88px + var(--rubidium-safe-bottom) + var(--rubidium-keyboard-overlap, 0px)
+    );
+  }
+
+  html[data-rubidium-native="true"] .mail-stage .undo-toast {
+    bottom: calc(88px + var(--rubidium-safe-bottom));
   }
 }

@@ -3,6 +3,7 @@ import { nativeAuthError, nativeSessionRedirect } from "@/lib/server/auth";
 import { consumeOauthState } from "@/lib/server/db";
 import { syncAccountCalendars } from "@/lib/server/calendar";
 import { syncAccount } from "@/lib/server/sync";
+import { after } from "next/server";
 
 export const runtime = "nodejs";
 
@@ -27,10 +28,12 @@ export async function GET(request: Request) {
     const result = await completeMicrosoftOauth(code, state);
     const { account } = result;
     native = result.native;
-    await Promise.allSettled([
-      syncAccount(account.id, 1),
-      syncAccountCalendars(account.id),
-    ]);
+    after(async () => {
+      await Promise.allSettled([
+        syncAccount(account.id, 1),
+        syncAccountCalendars(account.id),
+      ]);
+    });
     const destination = "/?connected=microsoft";
     if (native) return nativeSessionRedirect(request, destination);
     return Response.redirect(new URL(destination, publicOrigin));

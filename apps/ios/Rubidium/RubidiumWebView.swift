@@ -56,6 +56,7 @@ final class RubidiumBrowserModel: ObservableObject {
     @Published var sessionState: RubidiumSessionState = .loading
     @Published var googleIdentityAvailable = false
     @Published var microsoftIdentityAvailable = false
+    @Published var connectionRevision = 0
 
     weak var webView: WKWebView?
     fileprivate var nativeAuthAction: ((String, String, String?) -> Void)?
@@ -96,8 +97,12 @@ final class RubidiumBrowserModel: ObservableObject {
         guard let webView else { return "" }
         let script = """
         (() => {
-          const root = document.querySelector('main') || document.body;
-          return (root?.innerText || '').slice(0, 12000);
+          const root = document.querySelector('.mail-app.mobile-thread-open .thread-panel')
+            || (window.innerWidth >= 700 ? document.querySelector('.thread-panel') : null);
+          if (!root) return '';
+          const copy = root.cloneNode(true);
+          copy.querySelectorAll('button, textarea, input, .reply-dock, .message-action-rail').forEach(node => node.remove());
+          return (copy.innerText || '').replace(/\\n{3,}/g, '\\n\\n').trim().slice(0, 7000);
         })()
         """
         do {
@@ -105,6 +110,24 @@ final class RubidiumBrowserModel: ObservableObject {
         } catch {
             return ""
         }
+    }
+
+    func insertReplyDraft(_ draft: String) {
+        guard let webView,
+              let draftJSON = try? Self.javascriptString(draft) else { return }
+        webView.evaluateJavaScript(
+            """
+            (() => {
+              const field = document.querySelector('.reply-box textarea');
+              if (!field) return false;
+              const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+              setter?.call(field, \(draftJSON));
+              field.dispatchEvent(new Event('input', { bubbles: true }));
+              field.focus();
+              return true;
+            })()
+            """
+        )
     }
 
     func performWebCommand(_ command: RubidiumWebCommand) {
@@ -233,14 +256,23 @@ final class RubidiumBrowserModel: ObservableObject {
         // fetch inside WebKit while preserving the WKWebView's HTTP-only
         // Better Auth session cookie.
         let script = """
-        const response = await fetch(path, {
-          method,
-          credentials: 'include',
-          headers: hasBody ? {'content-type': 'application/json'} : undefined,
-          body: hasBody ? bodyText : undefined
-        });
-        const text = await response.text();
-        return JSON.stringify({ok: response.ok, status: response.status, body: text});
+        try {
+          const response = await fetch(path, {
+            method,
+            credentials: 'include',
+            headers: hasBody ? {'content-type': 'application/json'} : undefined,
+            body: hasBody ? bodyText : undefined
+          });
+          const text = await response.text();
+          return JSON.stringify({ok: response.ok, status: response.status, body: text});
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'The request could not be completed.';
+          return JSON.stringify({
+            ok: false,
+            status: 0,
+            body: JSON.stringify({error: message})
+          });
+        }
         """
         let result = try await webView.callAsyncJavaScript(
             script,
@@ -290,6 +322,7 @@ enum RubidiumWebCommand {
 
 struct RubidiumWebView: UIViewRepresentable {
     @ObservedObject var model: RubidiumBrowserModel
+    @Environment(\.colorScheme) private var colorScheme
 
     func makeCoordinator() -> Coordinator {
         Coordinator(model: model)
@@ -305,6 +338,13 @@ struct RubidiumWebView: UIViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: "rubidiumAuth")
         configuration.userContentController.addUserScript(
             WKUserScript(
+                source: "document.documentElement.dataset.rubidiumNative = 'true'",
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
+        configuration.userContentController.addUserScript(
+            WKUserScript(
                 source: Self.hapticBridgeScript,
                 injectionTime: .atDocumentEnd,
                 forMainFrameOnly: true
@@ -318,12 +358,7 @@ struct RubidiumWebView: UIViewRepresentable {
         webView.allowsBackForwardNavigationGestures = false
         webView.scrollView.contentInsetAdjustmentBehavior = .automatic
         webView.scrollView.keyboardDismissMode = .interactive
-        webView.scrollView.backgroundColor = UIColor(
-            red: 0.949,
-            green: 0.937,
-            blue: 0.91,
-            alpha: 1
-        )
+        webView.scrollView.backgroundColor = UIColor.systemBackground
         webView.underPageBackgroundColor = webView.scrollView.backgroundColor
         webView.isOpaque = false
 
@@ -341,6 +376,12 @@ struct RubidiumWebView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         model.webView = webView
+        let theme = colorScheme == .dark ? "dark" : "light"
+        webView.evaluateJavaScript(
+            "document.documentElement.dataset.rubidiumTheme = '\(theme)'; document.documentElement.dataset.rubidiumNative = 'true'"
+        )
+        webView.scrollView.backgroundColor = .systemBackground
+        webView.underPageBackgroundColor = .systemBackground
     }
 
     private static let hapticBridgeScript = """
@@ -386,6 +427,7 @@ struct RubidiumWebView: UIViewRepresentable {
         private let model: RubidiumBrowserModel
         private var progressObservation: NSKeyValueObservation?
         private var authenticationSession: ASWebAuthenticationSession?
+        private var lastConnectedURL: String?
 
         init(model: RubidiumBrowserModel) {
             self.model = model
@@ -410,12 +452,19 @@ struct RubidiumWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             applyNativeSafeArea(to: webView)
+            applyNativeAppearance(to: webView)
             refreshPageContext(in: webView)
             model.progress = 1
             model.isLoading = false
             model.errorMessage = nil
             if webView.url?.path == "/login" {
                 model.sessionState = .signedOut
+            }
+            if let url = webView.url,
+               URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains(where: { $0.name == "connected" }) == true,
+               lastConnectedURL != url.absoluteString {
+                lastConnectedURL = url.absoluteString
+                model.connectionRevision += 1
             }
             Task {
                 await model.refreshConfiguration()
@@ -588,6 +637,15 @@ struct RubidiumWebView: UIViewRepresentable {
                 document.documentElement.style.setProperty('--rubidium-native-safe-left', '\(insets.left)px');
                 """
             )
+        }
+
+        private func applyNativeAppearance(to webView: WKWebView) {
+            let theme = webView.traitCollection.userInterfaceStyle == .dark ? "dark" : "light"
+            webView.evaluateJavaScript(
+                "document.documentElement.dataset.rubidiumTheme = '\(theme)'; document.documentElement.dataset.rubidiumNative = 'true'"
+            )
+            webView.scrollView.backgroundColor = .systemBackground
+            webView.underPageBackgroundColor = .systemBackground
         }
 
         private func refreshPageContext(in webView: WKWebView) {

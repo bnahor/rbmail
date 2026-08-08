@@ -3,15 +3,18 @@ import UIKit
 
 struct RubidiumRootView: View {
     @EnvironmentObject private var browser: RubidiumBrowserModel
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(RubidiumAppearance.storageKey) private var appearanceRaw = RubidiumAppearance.system.rawValue
     @StateObject private var intelligence = RubidiumIntelligenceModel()
     @StateObject private var nativeStore = RubidiumNativeStore()
+    @StateObject private var security = RubidiumAppLockModel()
     @State private var selectedTab: RubidiumNativeTab = .mail
     @State private var isShowingIntelligence = false
     @Namespace private var intelligenceNamespace
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color(red: 0.949, green: 0.937, blue: 0.91)
+            Color(uiColor: .systemBackground)
                 .ignoresSafeArea()
 
             // The persistent web view owns the secure HTTP-only session cookie.
@@ -19,6 +22,7 @@ struct RubidiumRootView: View {
             RubidiumNativeShell(
                 browser: browser,
                 store: nativeStore,
+                security: security,
                 selection: $selectedTab,
                 mail: AnyView(RubidiumWebView(model: browser)),
                 intelligence: AnyView(intelligenceButton)
@@ -49,13 +53,19 @@ struct RubidiumRootView: View {
                 .frame(height: 2)
                 .accessibilityLabel("Loading Rubidium")
             }
+
+            if isSignedIn && security.isEnabled && !security.isUnlocked {
+                RubidiumLockView(security: security)
+                    .transition(.opacity)
+                    .zIndex(100)
+            }
         }
         .animation(.smooth(duration: 0.32), value: browser.sessionState)
-        .preferredColorScheme(.light)
+        .animation(.smooth(duration: 0.24), value: security.isUnlocked)
+        .preferredColorScheme(appearance.colorScheme)
         .sheet(isPresented: $isShowingIntelligence) {
             RubidiumIntelligenceView(intelligence: intelligence)
                 .environmentObject(browser)
-                .preferredColorScheme(.dark)
         }
         .onAppear {
             nativeStore.attach(browser)
@@ -64,6 +74,20 @@ struct RubidiumRootView: View {
         .onChange(of: browser.sessionState) { _, state in
             guard case .signedIn = state else { return }
             Task { await nativeStore.loadAll(force: true) }
+        }
+        .onChange(of: browser.connectionRevision) { _, _ in
+            Task { await nativeStore.reloadAfterConnection() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .active:
+                intelligence.refreshAvailability()
+                security.applicationDidBecomeActive()
+            case .inactive, .background:
+                security.applicationWillResignActive()
+            @unknown default:
+                break
+            }
         }
         .onChange(of: selectedTab) { _, _ in
             RubidiumHaptics.shared.play(.selection)
@@ -80,22 +104,13 @@ struct RubidiumRootView: View {
 
     private var launchState: some View {
         VStack(spacing: 18) {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(red: 0.93, green: 0.13, blue: 0.12))
-                .frame(width: 64, height: 64)
-                .overlay {
-                    Image(systemName: "diamond.fill")
-                        .font(.title2)
-                        .foregroundStyle(.white)
-                }
+            RubidiumBrandMark(size: 72, cornerRadius: 20)
             Text("Rubidium")
                 .font(.system(.title, design: .serif, weight: .bold))
-                .foregroundStyle(Color(red: 0.08, green: 0.08, blue: 0.07))
             ProgressView()
-                .tint(Color(red: 0.08, green: 0.08, blue: 0.07))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(red: 0.949, green: 0.937, blue: 0.91))
+        .background(Color(uiColor: .systemBackground))
     }
 
     @ViewBuilder
@@ -109,7 +124,7 @@ struct RubidiumRootView: View {
             }
         } else {
             Button(action: presentIntelligence) {
-                Image(systemName: "diamond.fill")
+                Image(systemName: "sparkles")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 46, height: 46)
@@ -130,5 +145,9 @@ struct RubidiumRootView: View {
         withAnimation(.smooth(duration: 0.28, extraBounce: 0.04)) {
             isShowingIntelligence = true
         }
+    }
+
+    private var appearance: RubidiumAppearance {
+        RubidiumAppearance(rawValue: appearanceRaw) ?? .system
     }
 }

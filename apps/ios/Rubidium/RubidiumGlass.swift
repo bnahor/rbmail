@@ -65,7 +65,7 @@ struct RubidiumIntelligenceButton: View {
 
     private var button: some View {
         Button(action: action) {
-            Image(systemName: isActive ? "sparkles" : "diamond.fill")
+            Image(systemName: "sparkles")
                 .contentTransition(.symbolEffect(.replace))
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.white)

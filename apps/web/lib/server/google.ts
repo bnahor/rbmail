@@ -210,8 +210,8 @@ function normalizeGmailMessage(message: GmailMessage): NormalizedMessage {
 
 async function fetchAndStore(account: StoredAccount, ids: string[]) {
   let processed = 0;
-  for (let index = 0; index < ids.length; index += 8) {
-    const batch = ids.slice(index, index + 8);
+  for (let index = 0; index < ids.length; index += 20) {
+    const batch = ids.slice(index, index + 20);
     const messages = await Promise.all(
       batch.map((id) =>
         gmailFetch<GmailMessage>(

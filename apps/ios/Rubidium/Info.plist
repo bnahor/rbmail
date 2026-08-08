@@ -35,6 +35,8 @@
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Use Face ID to keep your Rubidium inbox private when you leave the app.</string>
 	<key>RBMailAppURL</key>
 	<string>https://rbmail-production.up.railway.app</string>
 	<key>UIApplicationSceneManifest</key>
@@ -51,10 +53,6 @@
 	<array>
 		<string>arm64</string>
 	</array>
-	<key>UIStatusBarStyle</key>
-	<string>UIStatusBarStyleDarkContent</string>
-	<key>UIViewControllerBasedStatusBarAppearance</key>
-	<false/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

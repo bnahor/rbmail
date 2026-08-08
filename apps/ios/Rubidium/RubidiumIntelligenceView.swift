@@ -38,9 +38,9 @@ struct RubidiumIntelligenceView: View {
             }
             .background {
                 ZStack {
-                    Color(red: 0.045, green: 0.045, blue: 0.043)
+                    Color(uiColor: .systemGroupedBackground)
                     RadialGradient(
-                        colors: [Color.red.opacity(0.17), .clear],
+                        colors: [Color.red.opacity(0.12), .clear],
                         center: .topTrailing,
                         startRadius: 0,
                         endRadius: 420
@@ -61,8 +61,9 @@ struct RubidiumIntelligenceView: View {
             .animation(.smooth(duration: 0.4, extraBounce: 0.03), value: intelligence.isGenerating)
             .animation(.smooth(duration: 0.4, extraBounce: 0.03), value: intelligence.result)
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.fraction(0.68), .large])
         .presentationDragIndicator(.visible)
+        .presentationBackground(.ultraThinMaterial)
     }
 
     @ViewBuilder
@@ -205,6 +206,20 @@ struct RubidiumIntelligenceView: View {
             Text(intelligence.result)
                 .font(.body)
                 .textSelection(.enabled)
+
+            if intelligence.selectedAction == .draftReply {
+                Button {
+                    browser.insertReplyDraft(intelligence.result)
+                    RubidiumHaptics.shared.play(.success)
+                    dismiss()
+                } label: {
+                    Label("Use in reply", systemImage: "arrow.down.to.line.compact")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.roundedRectangle(radius: 14))
+                .controlSize(.large)
+            }
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)

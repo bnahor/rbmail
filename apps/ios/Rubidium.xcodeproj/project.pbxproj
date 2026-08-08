@@ -17,6 +17,7 @@
 		A10000000000000000000008 /* RubidiumGlass.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* RubidiumGlass.swift */; };
 		A10000000000000000000009 /* RubidiumIntelligenceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* RubidiumIntelligenceView.swift */; };
 		A1000000000000000000000A /* RubidiumNative.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* RubidiumNative.swift */; };
+		A1000000000000000000000B /* RubidiumSecurity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000D /* RubidiumSecurity.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -32,6 +33,7 @@
 		A2000000000000000000000A /* RubidiumGlass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RubidiumGlass.swift; sourceTree = "<group>"; };
 		A2000000000000000000000B /* RubidiumIntelligenceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RubidiumIntelligenceView.swift; sourceTree = "<group>"; };
 		A2000000000000000000000C /* RubidiumNative.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RubidiumNative.swift; sourceTree = "<group>"; };
+		A2000000000000000000000D /* RubidiumSecurity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RubidiumSecurity.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -64,6 +66,7 @@
 				A2000000000000000000000A /* RubidiumGlass.swift */,
 				A2000000000000000000000B /* RubidiumIntelligenceView.swift */,
 				A2000000000000000000000C /* RubidiumNative.swift */,
+				A2000000000000000000000D /* RubidiumSecurity.swift */,
 				A20000000000000000000004 /* Assets.xcassets */,
 				A20000000000000000000005 /* Info.plist */,
 				A20000000000000000000006 /* PrivacyInfo.xcprivacy */,
@@ -157,6 +160,7 @@
 				A10000000000000000000008 /* RubidiumGlass.swift in Sources */,
 				A10000000000000000000009 /* RubidiumIntelligenceView.swift in Sources */,
 				A1000000000000000000000A /* RubidiumNative.swift in Sources */,
+				A1000000000000000000000B /* RubidiumSecurity.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -460,8 +460,10 @@ export function MailShell() {
   const indexedSignature = useRef("");
 
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).has("preview")) return;
+    const parameters = new URLSearchParams(window.location.search);
+    if (parameters.has("preview")) return;
     let cancelled = false;
+    const refreshTimers: number[] = [];
     async function loadMailbox() {
       const session = await fetch("/api/session").then((response) => response.json());
       if (!session.authenticated) {
@@ -513,8 +515,17 @@ export function MailShell() {
       );
     }
     void loadMailbox();
+    if (parameters.has("connected")) {
+      // Provider callbacks return immediately while the first mail/calendar
+      // sync finishes after the response. Refresh the local cache quietly so
+      // messages appear without making the user relaunch or pull to refresh.
+      for (const delay of [1_500, 4_000, 9_000]) {
+        refreshTimers.push(window.setTimeout(() => void loadMailbox(), delay));
+      }
+    }
     return () => {
       cancelled = true;
+      refreshTimers.forEach(window.clearTimeout);
     };
   }, []);
 

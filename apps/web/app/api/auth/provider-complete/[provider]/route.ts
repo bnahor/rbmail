@@ -9,6 +9,7 @@ import {
 import { syncAccountCalendars } from "@/lib/server/calendar";
 import { saveProviderAccountFromToken } from "@/lib/server/oauth";
 import { syncAccount } from "@/lib/server/sync";
+import { after } from "next/server";
 
 export const runtime = "nodejs";
 
@@ -44,10 +45,12 @@ export async function GET(
       user.id,
       storedTokenFromSocial(grant),
     );
-    await Promise.allSettled([
-      syncAccount(account.id, 2),
-      syncAccountCalendars(account.id),
-    ]);
+    after(async () => {
+      await Promise.allSettled([
+        syncAccount(account.id, 2),
+        syncAccountCalendars(account.id),
+      ]);
+    });
     const destination = `/?connected=${encodeURIComponent(provider)}`;
     if (native) return nativeSessionRedirect(request, destination);
     return Response.redirect(new URL(destination, request.url));
