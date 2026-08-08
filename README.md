@@ -21,7 +21,8 @@ The repository contains:
 - a unified Today agenda across writable Google and Outlook calendars;
 - Calendar-backed Google Meet and Microsoft Teams event creation;
 - encrypted event storage with Google sync tokens and Microsoft delta links;
-- a native macOS desktop wrapper and repeatable signing/notarization script.
+- native macOS and SwiftUI iOS wrappers, with repeatable signing, notarization,
+  and TestFlight archive scripts.
 
 The UI automatically switches from realistic demo conversations to connected
 mail as soon as an account is added.
