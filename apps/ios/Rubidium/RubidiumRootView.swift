@@ -6,6 +6,7 @@ struct RubidiumRootView: View {
     @StateObject private var intelligence = RubidiumIntelligenceModel()
     @State private var isShowingIntelligence = false
     @State private var isKeyboardVisible = false
+    @Namespace private var controlPlaneNamespace
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -20,16 +21,12 @@ struct RubidiumRootView: View {
                     Spacer()
                     HStack {
                         Spacer()
-                        RubidiumIntelligenceButton(isActive: isShowingIntelligence) {
-                            RubidiumHaptics.shared.play(.selection)
-                            intelligence.refreshAvailability()
-                            isShowingIntelligence = true
-                        }
+                        intelligenceControl
                     }
                     .padding(.trailing, 12)
                     .padding(.bottom, 14)
                 }
-                .transition(.scale(scale: 0.82, anchor: .bottomTrailing).combined(with: .opacity))
+                .transition(.blurReplace)
             }
 
             if browser.isLoading {
@@ -53,7 +50,7 @@ struct RubidiumRootView: View {
                     .padding(.top, 12)
             }
         }
-        .animation(.spring(response: 0.38, dampingFraction: 0.86), value: browser.errorMessage)
+        .animation(.smooth(duration: 0.34), value: browser.errorMessage)
         .background(Color(red: 0.949, green: 0.937, blue: 0.91))
         .preferredColorScheme(.light)
         .sheet(isPresented: $isShowingIntelligence) {
@@ -80,10 +77,34 @@ struct RubidiumRootView: View {
             browser.stabilizeViewportAfterKeyboardChange(overlap: overlap)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+            withAnimation(.smooth(duration: 0.3, extraBounce: 0.04)) {
                 isKeyboardVisible = false
             }
             browser.stabilizeViewportAfterKeyboardChange(overlap: 0)
+        }
+    }
+
+    @ViewBuilder
+    private var intelligenceControl: some View {
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 12) {
+                intelligenceButton
+            }
+        } else {
+            intelligenceButton
+        }
+    }
+
+    private var intelligenceButton: some View {
+        RubidiumIntelligenceButton(
+            isActive: isShowingIntelligence,
+            namespace: controlPlaneNamespace
+        ) {
+            RubidiumHaptics.shared.play(.selection)
+            intelligence.refreshAvailability()
+            withAnimation(.smooth(duration: 0.28, extraBounce: 0.04)) {
+                isShowingIntelligence = true
+            }
         }
     }
 
@@ -113,11 +134,7 @@ struct RubidiumRootView: View {
             .controlSize(.small)
         }
         .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(.white.opacity(0.09), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.32), radius: 24, y: 10)
+        .rubidiumContentPanel(cornerRadius: 14)
+        .shadow(color: .black.opacity(0.16), radius: 18, y: 8)
     }
 }

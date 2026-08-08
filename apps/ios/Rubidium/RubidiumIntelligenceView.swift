@@ -5,6 +5,7 @@ struct RubidiumIntelligenceView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var browser: RubidiumBrowserModel
     @ObservedObject var intelligence: RubidiumIntelligenceModel
+    @Namespace private var intelligenceGlassNamespace
 
     var body: some View {
         NavigationStack {
@@ -18,10 +19,10 @@ struct RubidiumIntelligenceView: View {
 
                     if intelligence.isGenerating {
                         generatingView
-                            .transition(.scale(scale: 0.96).combined(with: .opacity))
+                            .transition(.blurReplace)
                     } else if !intelligence.result.isEmpty {
                         resultView
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                            .transition(.blurReplace)
                     }
 
                     if let error = intelligence.errorMessage {
@@ -30,7 +31,7 @@ struct RubidiumIntelligenceView: View {
                             .foregroundStyle(.orange)
                             .padding(14)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .rubidiumGlass(cornerRadius: 16)
+                            .rubidiumContentPanel(cornerRadius: 16)
                     }
                 }
                 .padding(20)
@@ -57,8 +58,8 @@ struct RubidiumIntelligenceView: View {
                     }
                 }
             }
-            .animation(.spring(response: 0.42, dampingFraction: 0.84), value: intelligence.isGenerating)
-            .animation(.spring(response: 0.42, dampingFraction: 0.84), value: intelligence.result)
+            .animation(.smooth(duration: 0.4, extraBounce: 0.03), value: intelligence.isGenerating)
+            .animation(.smooth(duration: 0.4, extraBounce: 0.03), value: intelligence.result)
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -86,53 +87,94 @@ struct RubidiumIntelligenceView: View {
                 Text(reason)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Button("Check again") {
-                    RubidiumHaptics.shared.play(.action)
-                    intelligence.refreshAvailability()
-                }
-                .buttonStyle(.bordered)
+                checkAgainButton
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .rubidiumGlass(cornerRadius: 18)
+            .rubidiumContentPanel(cornerRadius: 18)
         }
     }
 
+    @ViewBuilder
+    private var checkAgainButton: some View {
+        if #available(iOS 26.0, *) {
+            Button("Check again", action: checkAvailability)
+                .buttonStyle(.glass)
+        } else {
+            Button("Check again", action: checkAvailability)
+                .buttonStyle(.bordered)
+        }
+    }
+
+    private func checkAvailability() {
+        RubidiumHaptics.shared.play(.action)
+        intelligence.refreshAvailability()
+    }
+
+    @ViewBuilder
     private var actionGrid: some View {
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 10) {
+                actionButtons
+            }
+        } else {
+            actionButtons
+        }
+    }
+
+    private var actionButtons: some View {
         VStack(spacing: 10) {
             ForEach(RubidiumIntelligenceAction.allCases) { action in
-                Button {
-                    RubidiumHaptics.shared.play(.action)
-                    Task {
-                        let context = await browser.visibleMailContext()
-                        await intelligence.perform(action, context: context)
-                    }
-                } label: {
-                    HStack(spacing: 14) {
-                        Image(systemName: action.symbol)
-                            .font(.system(size: 17, weight: .semibold))
-                            .frame(width: 34, height: 34)
-                            .background(Color.red.opacity(0.16), in: RoundedRectangle(cornerRadius: 10))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(action.title)
-                                .font(.headline)
-                            Text(action.subtitle)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(14)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .rubidiumGlass(cornerRadius: 17, interactive: true)
-                .disabled(intelligence.isGenerating)
+                actionButton(action)
             }
         }
+    }
+
+    @ViewBuilder
+    private func actionButton(_ action: RubidiumIntelligenceAction) -> some View {
+        if #available(iOS 26.0, *) {
+            actionButtonBase(action)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.roundedRectangle(radius: 17))
+                .glassEffectID(action.id, in: intelligenceGlassNamespace)
+                .glassEffectTransition(.matchedGeometry)
+        } else {
+            actionButtonBase(action)
+                .buttonStyle(.plain)
+                .rubidiumGlass(cornerRadius: 17, interactive: true)
+        }
+    }
+
+    private func actionButtonBase(_ action: RubidiumIntelligenceAction) -> some View {
+        Button {
+            RubidiumHaptics.shared.play(.action)
+            Task {
+                let context = await browser.visibleMailContext()
+                await intelligence.perform(action, context: context)
+            }
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: action.symbol)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .frame(width: 30, height: 30)
+                    .symbolEffect(.bounce, value: intelligence.selectedAction == action)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(action.title)
+                        .font(.headline)
+                    Text(action.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(14)
+            .contentShape(Rectangle())
+        }
+        .disabled(intelligence.isGenerating)
     }
 
     private var generatingView: some View {
@@ -149,7 +191,7 @@ struct RubidiumIntelligenceView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .rubidiumGlass(cornerRadius: 18, tint: .red.opacity(0.08))
+        .rubidiumContentPanel(cornerRadius: 18)
     }
 
     private var resultView: some View {
@@ -158,13 +200,7 @@ struct RubidiumIntelligenceView: View {
                 Label(intelligence.selectedAction?.title ?? "Result", systemImage: "sparkles")
                     .font(.headline)
                 Spacer()
-                Button {
-                    UIPasteboard.general.string = intelligence.result
-                    RubidiumHaptics.shared.play(.success)
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                }
-                .accessibilityLabel("Copy result")
+                copyButton
             }
             Text(intelligence.result)
                 .font(.body)
@@ -172,6 +208,29 @@ struct RubidiumIntelligenceView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .rubidiumGlass(cornerRadius: 20, tint: .red.opacity(0.07))
+        .rubidiumContentPanel(cornerRadius: 20)
+    }
+
+    @ViewBuilder
+    private var copyButton: some View {
+        if #available(iOS 26.0, *) {
+            copyButtonBase
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+        } else {
+            copyButtonBase
+                .buttonStyle(.plain)
+        }
+    }
+
+    private var copyButtonBase: some View {
+        Button {
+            UIPasteboard.general.string = intelligence.result
+            RubidiumHaptics.shared.play(.success)
+        } label: {
+            Image(systemName: "doc.on.doc")
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .accessibilityLabel("Copy result")
     }
 }
