@@ -66,14 +66,15 @@ struct RubidiumWebView: UIViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
-        webView.scrollView.contentInsetAdjustmentBehavior = .automatic
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.scrollView.keyboardDismissMode = .interactive
         webView.scrollView.backgroundColor = UIColor(
-            red: 0.055,
-            green: 0.055,
-            blue: 0.05,
+            red: 0.949,
+            green: 0.937,
+            blue: 0.91,
             alpha: 1
         )
+        webView.underPageBackgroundColor = webView.scrollView.backgroundColor
         webView.isOpaque = false
 
         context.coordinator.observeProgress(of: webView)

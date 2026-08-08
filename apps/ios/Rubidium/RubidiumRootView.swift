@@ -7,11 +7,11 @@ struct RubidiumRootView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color(red: 0.055, green: 0.055, blue: 0.05)
+            Color(red: 0.949, green: 0.937, blue: 0.91)
                 .ignoresSafeArea()
 
             RubidiumWebView(model: browser)
-                .ignoresSafeArea(.container, edges: .bottom)
+                .ignoresSafeArea()
 
             VStack {
                 Spacer()
@@ -49,10 +49,12 @@ struct RubidiumRootView: View {
             }
         }
         .animation(.spring(response: 0.38, dampingFraction: 0.86), value: browser.errorMessage)
-        .background(Color(red: 0.055, green: 0.055, blue: 0.05))
+        .background(Color(red: 0.949, green: 0.937, blue: 0.91))
+        .preferredColorScheme(.light)
         .sheet(isPresented: $isShowingIntelligence) {
             RubidiumIntelligenceView(intelligence: intelligence)
                 .environmentObject(browser)
+                .preferredColorScheme(.dark)
         }
         .onChange(of: browser.errorMessage) { _, error in
             if error != nil {
