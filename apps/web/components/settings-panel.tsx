@@ -245,7 +245,7 @@ export function SettingsPanel() {
                 <span className="auth-provider-mark">G</span>
                 <span>
                   <strong>Continue with Google</strong>
-                  <small>Gmail + Google Calendar</small>
+                  <small>Sign in, then connect Gmail</small>
                 </span>
                 {busy === "google" ? (
                   <LoaderCircle className="spin" size={17} />
@@ -269,7 +269,7 @@ export function SettingsPanel() {
                 </span>
                 <span>
                   <strong>Continue with Microsoft</strong>
-                  <small>Outlook + Microsoft Calendar</small>
+                  <small>Sign in, then connect Outlook</small>
                 </span>
                 {busy === "microsoft" ? (
                   <LoaderCircle className="spin" size={17} />

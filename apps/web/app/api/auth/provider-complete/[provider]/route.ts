@@ -2,6 +2,7 @@ import { storedTokenFromSocial } from "@/lib/mail/provider-auth";
 import type { Provider } from "@/lib/mail/types";
 import { auth, requireUser } from "@/lib/server/auth";
 import { syncAccountCalendars } from "@/lib/server/calendar";
+import { composioConfigured } from "@/lib/server/composio";
 import { saveProviderAccountFromToken } from "@/lib/server/oauth";
 import { syncAccount } from "@/lib/server/sync";
 
@@ -28,6 +29,11 @@ export async function GET(
   }
 
   try {
+    if (composioConfigured()) {
+      return Response.redirect(
+        new URL(`/api/composio/connect/${provider}`, request.url),
+      );
+    }
     const grant = await auth.api.refreshToken({
       body: { providerId: provider },
       headers: request.headers,
