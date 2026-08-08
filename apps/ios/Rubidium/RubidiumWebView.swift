@@ -357,7 +357,10 @@ struct RubidiumWebView: UIViewRepresentable {
         webView.uiDelegate = context.coordinator
         // Horizontal gestures belong to Rubidium's mail actions, not browser history.
         webView.allowsBackForwardNavigationGestures = false
-        webView.scrollView.contentInsetAdjustmentBehavior = .automatic
+        // SwiftUI already places this representable inside the top and side
+        // safe areas. Asking UIScrollView to adjust again creates a second
+        // status-bar inset and visibly pushes the mailbox down.
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.scrollView.keyboardDismissMode = .interactive
         webView.scrollView.backgroundColor = UIColor.systemBackground
         webView.underPageBackgroundColor = webView.scrollView.backgroundColor
@@ -635,10 +638,13 @@ struct RubidiumWebView: UIViewRepresentable {
             let insets = webView.window?.safeAreaInsets ?? webView.safeAreaInsets
             webView.evaluateJavaScript(
                 """
-                document.documentElement.style.setProperty('--rubidium-native-safe-top', '\(insets.top)px');
-                document.documentElement.style.setProperty('--rubidium-native-safe-right', '\(insets.right)px');
+                // SwiftUI already consumes the top and side safe areas for
+                // this view. Only the bottom is edge-to-edge so the native
+                // control plane can float above the home indicator.
+                document.documentElement.style.setProperty('--rubidium-native-safe-top', '0px');
+                document.documentElement.style.setProperty('--rubidium-native-safe-right', '0px');
                 document.documentElement.style.setProperty('--rubidium-native-safe-bottom', '\(insets.bottom)px');
-                document.documentElement.style.setProperty('--rubidium-native-safe-left', '\(insets.left)px');
+                document.documentElement.style.setProperty('--rubidium-native-safe-left', '0px');
                 """
             )
         }
