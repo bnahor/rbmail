@@ -3823,11 +3823,23 @@ textarea:focus-visible {
 
 .mail-stage .view-nav em,
 .mail-stage .account-row em {
+  display: inline-grid;
   min-width: 22px;
-  border-radius: 6px;
+  height: 18px;
+  flex: 0 0 auto;
+  place-items: center;
+  box-sizing: border-box;
+  padding: 0 6px;
+  border-radius: 999px;
   background: #464744;
   color: #fff;
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1;
+  text-align: center;
 }
 
 .mail-stage .view-nav button.active em {
