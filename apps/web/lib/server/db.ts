@@ -99,6 +99,7 @@ function initialize(database: DatabaseSync) {
       user_id TEXT,
       provider TEXT NOT NULL,
       verifier TEXT NOT NULL,
+      native INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL
     );
 
@@ -169,6 +170,7 @@ function initialize(database: DatabaseSync) {
     "ALTER TABLE mail_accounts ADD COLUMN auth_backend TEXT NOT NULL DEFAULT 'direct'",
     "ALTER TABLE mail_accounts ADD COLUMN connected_account_id TEXT",
     "ALTER TABLE oauth_states ADD COLUMN user_id TEXT",
+    "ALTER TABLE oauth_states ADD COLUMN native INTEGER NOT NULL DEFAULT 0",
   ]) {
     try {
       database.exec(statement);
@@ -304,9 +306,13 @@ export function saveComposioAccount(input: {
 
   const id = existing ? String(existing.id) : randomUUID();
   const now = Date.now();
-  const scope = (input.provider === "google"
-    ? GOOGLE_SCOPES
-    : MICROSOFT_SCOPES
+  // Gmail and Google Calendar are separate Composio toolkits. Do not label a
+  // Gmail-only connection as calendar-capable: provider calls then fail with
+  // "insufficient authentication scopes" while the UI claims everything is on.
+  const scope = (
+    input.provider === "google"
+      ? GOOGLE_SCOPES.filter((item) => !item.includes("/auth/calendar."))
+      : MICROSOFT_SCOPES
   ).join(" ");
   const token: StoredToken = {
     accessToken: "",
@@ -382,7 +388,10 @@ export function getPublicAccounts(userId: string): PublicAccount[] {
     }) => {
       return {
         ...account,
-        capabilities: accountCapabilities(account.provider, token.scope),
+        capabilities:
+          account.authBackend === "composio" && account.provider === "google"
+            ? { mail: true, calendar: false }
+            : accountCapabilities(account.provider, token.scope),
       };
     },
   );
@@ -432,6 +441,7 @@ export function saveOauthState(
   userId: string,
   provider: Provider,
   verifier: string,
+  native = false,
 ) {
   const database = getDatabase();
   database
@@ -439,22 +449,22 @@ export function saveOauthState(
     .run(Date.now() - 10 * 60 * 1000);
   database
     .prepare(
-      "INSERT INTO oauth_states (state, user_id, provider, verifier, created_at) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO oauth_states (state, user_id, provider, verifier, native, created_at) VALUES (?, ?, ?, ?, ?, ?)",
     )
-    .run(state, userId, provider, verifier, Date.now());
+    .run(state, userId, provider, verifier, native ? 1 : 0, Date.now());
 }
 
 export function consumeOauthState(
   state: string,
   provider: Provider,
-): { verifier: string; userId: string } | null {
+): { verifier: string; userId: string; native: boolean } | null {
   const database = getDatabase();
   const row = database
     .prepare(
-      "SELECT verifier, user_id, created_at FROM oauth_states WHERE state = ? AND provider = ?",
+      "SELECT verifier, user_id, native, created_at FROM oauth_states WHERE state = ? AND provider = ?",
     )
     .get(state, provider) as
-    | { verifier: string; user_id: string | null; created_at: number }
+    | { verifier: string; user_id: string | null; native: number; created_at: number }
     | undefined;
   database.prepare("DELETE FROM oauth_states WHERE state = ?").run(state);
   if (
@@ -464,7 +474,11 @@ export function consumeOauthState(
   ) {
     return null;
   }
-  return { verifier: row.verifier, userId: row.user_id };
+  return {
+    verifier: row.verifier,
+    userId: row.user_id,
+    native: Boolean(row.native),
+  };
 }
 
 export function saveComposioState(input: {

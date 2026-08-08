@@ -48,6 +48,9 @@ type ProviderError = Error & {
 };
 
 function hasCalendarScope(account: StoredAccount) {
+  if (account.authBackend === "composio" && account.provider === "google") {
+    return false;
+  }
   return accountCapabilities(account.provider, account.token.scope).calendar;
 }
 

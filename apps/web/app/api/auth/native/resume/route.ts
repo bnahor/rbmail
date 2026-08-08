@@ -4,10 +4,12 @@ export const runtime = "nodejs";
 
 const providers = new Set(["google", "microsoft"]);
 
-function document(token: string, provider: string) {
+function document(token: string, provider: string, direct: boolean) {
   const encodedToken = JSON.stringify(token).replaceAll("<", "\\u003c");
   const next = JSON.stringify(
-    `/api/composio/connect/${provider}?native=1`,
+    direct
+      ? `/api/oauth/${provider}/start?native=1`
+      : `/api/composio/connect/${provider}?native=1`,
   ).replaceAll("<", "\\u003c");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -36,7 +38,13 @@ export async function GET(request: Request) {
   if (!token || !providers.has(provider)) {
     return nativeAuthError("The Rubidium session handoff is invalid.");
   }
-  return new Response(document(token, provider), {
+  const direct =
+    provider === "google"
+      ? Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)
+      : Boolean(
+          process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET,
+        );
+  return new Response(document(token, provider, direct), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",

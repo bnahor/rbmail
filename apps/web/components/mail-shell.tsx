@@ -1386,6 +1386,7 @@ export function MailShell() {
                         className={`thread-row ${
                           selected?.id === thread.id ? "selected" : ""
                         } ${thread.unread ? "unread" : ""}`}
+                        data-thread-id={thread.id}
                         type="button"
                         aria-current={selected?.id === thread.id ? "true" : undefined}
                         aria-expanded={

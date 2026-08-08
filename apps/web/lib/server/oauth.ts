@@ -30,10 +30,14 @@ function verifierAndChallenge() {
   return { verifier, challenge };
 }
 
-export function getAuthorizationUrl(provider: Provider, userId: string): string {
+export function getAuthorizationUrl(
+  provider: Provider,
+  userId: string,
+  native = false,
+): string {
   const state = randomBytes(32).toString("base64url");
   const { verifier, challenge } = verifierAndChallenge();
-  saveOauthState(state, userId, provider, verifier);
+  saveOauthState(state, userId, provider, verifier, native);
 
   if (provider === "google") {
     const params = new URLSearchParams({
@@ -99,16 +103,30 @@ function normalizeToken(payload: Record<string, unknown>): StoredToken {
 export async function completeGoogleOauth(code: string, state: string) {
   const oauthState = consumeOauthState(state, "google");
   if (!oauthState) throw new Error("Google OAuth state is invalid or expired.");
-  const payload = await tokenRequest("https://oauth2.googleapis.com/token", {
-    client_id: required("GOOGLE_CLIENT_ID"),
-    client_secret: required("GOOGLE_CLIENT_SECRET"),
-    redirect_uri: `${appUrl()}/api/oauth/google/callback`,
-    grant_type: "authorization_code",
-    code,
-    code_verifier: oauthState.verifier,
-  });
-  const token = normalizeToken(payload);
-  return saveProviderAccountFromToken("google", oauthState.userId, token);
+  try {
+    const payload = await tokenRequest("https://oauth2.googleapis.com/token", {
+      client_id: required("GOOGLE_CLIENT_ID"),
+      client_secret: required("GOOGLE_CLIENT_SECRET"),
+      redirect_uri: `${appUrl()}/api/oauth/google/callback`,
+      grant_type: "authorization_code",
+      code,
+      code_verifier: oauthState.verifier,
+    });
+    const token = normalizeToken(payload);
+    return {
+      account: await saveProviderAccountFromToken(
+        "google",
+        oauthState.userId,
+        token,
+      ),
+      native: oauthState.native,
+    };
+  } catch (error) {
+    throw Object.assign(
+      error instanceof Error ? error : new Error("Google OAuth failed."),
+      { native: oauthState.native },
+    );
+  }
 }
 
 export async function saveProviderAccountFromToken(
@@ -174,21 +192,35 @@ export async function saveProviderAccountFromToken(
 export async function completeMicrosoftOauth(code: string, state: string) {
   const oauthState = consumeOauthState(state, "microsoft");
   if (!oauthState) throw new Error("Microsoft OAuth state is invalid or expired.");
-  const tenant = process.env.MICROSOFT_TENANT?.trim() || "common";
-  const payload = await tokenRequest(
-    `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
-    {
-      client_id: required("MICROSOFT_CLIENT_ID"),
-      client_secret: required("MICROSOFT_CLIENT_SECRET"),
-      redirect_uri: `${appUrl()}/api/oauth/microsoft/callback`,
-      grant_type: "authorization_code",
-      code,
-      code_verifier: oauthState.verifier,
-      scope: MICROSOFT_SCOPES.join(" "),
-    },
-  );
-  const token = normalizeToken(payload);
-  return saveProviderAccountFromToken("microsoft", oauthState.userId, token);
+  try {
+    const tenant = process.env.MICROSOFT_TENANT?.trim() || "common";
+    const payload = await tokenRequest(
+      `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
+      {
+        client_id: required("MICROSOFT_CLIENT_ID"),
+        client_secret: required("MICROSOFT_CLIENT_SECRET"),
+        redirect_uri: `${appUrl()}/api/oauth/microsoft/callback`,
+        grant_type: "authorization_code",
+        code,
+        code_verifier: oauthState.verifier,
+        scope: MICROSOFT_SCOPES.join(" "),
+      },
+    );
+    const token = normalizeToken(payload);
+    return {
+      account: await saveProviderAccountFromToken(
+        "microsoft",
+        oauthState.userId,
+        token,
+      ),
+      native: oauthState.native,
+    };
+  } catch (error) {
+    throw Object.assign(
+      error instanceof Error ? error : new Error("Microsoft OAuth failed."),
+      { native: oauthState.native },
+    );
+  }
 }
 
 export async function refreshGoogleToken(refreshToken: string) {

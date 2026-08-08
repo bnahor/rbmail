@@ -3,7 +3,6 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { betterAuth } from "better-auth";
 import { oneTimeToken } from "better-auth/plugins/one-time-token";
 
-import { composioEnabled } from "@/lib/mail/composio-core";
 import {
   GOOGLE_SCOPES,
   MICROSOFT_SCOPES,
@@ -24,11 +23,6 @@ function authSecret() {
     .digest("base64url");
 }
 
-const managedProviderConnections = composioEnabled(
-  process.env.COMPOSIO_ENABLED,
-  process.env.COMPOSIO_API_KEY,
-);
-
 export const auth = betterAuth({
   appName: "Rubidium",
   baseURL: appUrl(),
@@ -41,13 +35,9 @@ export const auth = betterAuth({
           google: {
             clientId: process.env.GOOGLE_CLIENT_ID,
             clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-            ...(managedProviderConnections
-              ? { prompt: "select_account" as const, scope: [] }
-              : {
-                  accessType: "offline" as const,
-                  prompt: "select_account consent" as const,
-                  scope: [...GOOGLE_SCOPES],
-                }),
+            accessType: "offline" as const,
+            prompt: "select_account consent" as const,
+            scope: [...GOOGLE_SCOPES],
           },
         }
       : {}),
@@ -59,7 +49,7 @@ export const auth = betterAuth({
             clientSecret: process.env.MICROSOFT_CLIENT_SECRET,
             tenantId: process.env.MICROSOFT_TENANT?.trim() || "common",
             prompt: "select_account" as const,
-            scope: managedProviderConnections ? [] : [...MICROSOFT_SCOPES],
+            scope: [...MICROSOFT_SCOPES],
             disableProfilePhoto: true,
           },
         }
@@ -100,7 +90,8 @@ export const auth = betterAuth({
   },
   plugins: [
     oneTimeToken({
-      expiresIn: 3,
+      // A native handoff may pause briefly while iOS restores the app.
+      expiresIn: 60,
       storeToken: "hashed",
     }),
   ],

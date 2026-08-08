@@ -8,7 +8,6 @@ struct RubidiumApp: App {
         WindowGroup {
             RubidiumRootView()
                 .environmentObject(browser)
-                .preferredColorScheme(.dark)
         }
     }
 }

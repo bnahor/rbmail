@@ -519,9 +519,9 @@ export function SettingsPanel() {
               <a
                 className="settings-primary"
                 href={
-                  config.integrations.composio
-                    ? "/api/composio/connect/google"
-                    : "/api/oauth/google/start"
+                  config.providers.google
+                    ? "/api/oauth/google/start"
+                    : "/api/composio/connect/google"
                 }
                 onClick={(event) => void connectProvider(event, "google")}
               >
@@ -542,9 +542,9 @@ export function SettingsPanel() {
               <a
                 className="settings-primary"
                 href={
-                  config.integrations.composio
-                    ? "/api/composio/connect/microsoft"
-                    : "/api/oauth/microsoft/start"
+                  config.providers.microsoft
+                    ? "/api/oauth/microsoft/start"
+                    : "/api/composio/connect/microsoft"
                 }
                 onClick={(event) => void connectProvider(event, "microsoft")}
               >
@@ -584,27 +584,15 @@ export function SettingsPanel() {
                         ? "Managed securely by Composio"
                         : "Direct provider connection"}
                     </small>
-                    {account.authBackend === "direct" &&
-                    config?.integrations.composio ? (
-                      <a
-                        className="settings-reconnect"
-                        href={`/api/composio/connect/${account.provider}`}
-                        onClick={(event) =>
-                          void connectProvider(event, account.provider)
-                        }
-                      >
-                        Move this mailbox to Composio
-                      </a>
-                    ) : null}
                     {account.capabilities.calendar ? (
                       <small className="account-capability">Mail + Calendar</small>
                     ) : (
                       <a
                         className="settings-reconnect"
                         href={
-                          config?.integrations.composio
-                            ? `/api/composio/connect/${account.provider}`
-                            : `/api/oauth/${account.provider}/start`
+                          config?.providers[account.provider]
+                            ? `/api/oauth/${account.provider}/start`
+                            : `/api/composio/connect/${account.provider}`
                         }
                         onClick={(event) =>
                           void connectProvider(event, account.provider)

@@ -4,32 +4,39 @@ import UIKit
 struct RubidiumRootView: View {
     @EnvironmentObject private var browser: RubidiumBrowserModel
     @StateObject private var intelligence = RubidiumIntelligenceModel()
+    @StateObject private var nativeStore = RubidiumNativeStore()
+    @State private var selectedTab: RubidiumNativeTab = .mail
     @State private var isShowingIntelligence = false
-    @State private var isKeyboardVisible = false
-    @Namespace private var controlPlaneNamespace
+    @Namespace private var intelligenceNamespace
 
     var body: some View {
         ZStack(alignment: .top) {
             Color(red: 0.949, green: 0.937, blue: 0.91)
                 .ignoresSafeArea()
 
-            RubidiumWebView(model: browser)
-                .ignoresSafeArea()
+            // The persistent web view owns the secure HTTP-only session cookie.
+            // Native surfaces request data through that same authenticated origin.
+            RubidiumNativeShell(
+                browser: browser,
+                store: nativeStore,
+                selection: $selectedTab,
+                mail: AnyView(RubidiumWebView(model: browser)),
+                intelligence: AnyView(intelligenceButton)
+            )
+            .opacity(isSignedIn ? 1 : 0)
+            .allowsHitTesting(isSignedIn)
 
-            if !isKeyboardVisible && browser.isMailWorkspace {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        controlPlane
-                    }
-                    .padding(.trailing, 12)
-                    .padding(.bottom, 14)
-                }
-                .transition(.blurReplace)
+            switch browser.sessionState {
+            case .loading:
+                launchState
+            case .signedOut:
+                RubidiumNativeSignInView(browser: browser)
+                    .transition(.opacity.combined(with: .scale(scale: 0.985)))
+            case .signedIn:
+                EmptyView()
             }
 
-            if browser.isLoading {
+            if browser.isLoading && isSignedIn {
                 GeometryReader { geometry in
                     Rectangle()
                         .fill(Color(red: 0.94, green: 0.12, blue: 0.16))
@@ -42,135 +49,86 @@ struct RubidiumRootView: View {
                 .frame(height: 2)
                 .accessibilityLabel("Loading Rubidium")
             }
-
-            if let error = browser.errorMessage {
-                errorCard(error)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
-            }
         }
-        .animation(.smooth(duration: 0.34), value: browser.errorMessage)
-        .background(Color(red: 0.949, green: 0.937, blue: 0.91))
+        .animation(.smooth(duration: 0.32), value: browser.sessionState)
         .preferredColorScheme(.light)
         .sheet(isPresented: $isShowingIntelligence) {
             RubidiumIntelligenceView(intelligence: intelligence)
                 .environmentObject(browser)
                 .preferredColorScheme(.dark)
         }
-        .onChange(of: browser.errorMessage) { _, error in
-            if error != nil {
-                RubidiumHaptics.shared.play(.error)
-            }
-        }
         .onAppear {
+            nativeStore.attach(browser)
             RubidiumHaptics.shared.prepare()
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
-            withAnimation(.easeOut(duration: 0.16)) {
-                isKeyboardVisible = true
-            }
-            let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
-            let overlap = keyboardFrame.map {
-                max(0, UIScreen.main.bounds.height - $0.minY)
-            } ?? 0
-            browser.stabilizeViewportAfterKeyboardChange(overlap: overlap)
+        .onChange(of: browser.sessionState) { _, state in
+            guard case .signedIn = state else { return }
+            Task { await nativeStore.loadAll(force: true) }
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            withAnimation(.smooth(duration: 0.3, extraBounce: 0.04)) {
-                isKeyboardVisible = false
-            }
-            browser.stabilizeViewportAfterKeyboardChange(overlap: 0)
+        .onChange(of: selectedTab) { _, _ in
+            RubidiumHaptics.shared.play(.selection)
+        }
+        .onChange(of: browser.errorMessage) { _, error in
+            if error != nil { RubidiumHaptics.shared.play(.error) }
         }
     }
 
-    @ViewBuilder
-    private var controlPlane: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 10) {
-                HStack(spacing: 8) {
-                    webCommandButton(.search, symbol: "magnifyingglass", label: "Search mail")
-                    webCommandButton(.compose, symbol: "square.and.pencil", label: "New message")
-                    intelligenceButton
+    private var isSignedIn: Bool {
+        if case .signedIn = browser.sessionState { return true }
+        return false
+    }
+
+    private var launchState: some View {
+        VStack(spacing: 18) {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(red: 0.93, green: 0.13, blue: 0.12))
+                .frame(width: 64, height: 64)
+                .overlay {
+                    Image(systemName: "diamond.fill")
+                        .font(.title2)
+                        .foregroundStyle(.white)
                 }
-            }
-        } else {
-            HStack(spacing: 8) {
-                webCommandButton(.search, symbol: "magnifyingglass", label: "Search mail")
-                webCommandButton(.compose, symbol: "square.and.pencil", label: "New message")
-                intelligenceButton
-            }
-            .padding(6)
-            .rubidiumGlass(cornerRadius: 28)
+            Text("Rubidium")
+                .font(.system(.title, design: .serif, weight: .bold))
+                .foregroundStyle(Color(red: 0.08, green: 0.08, blue: 0.07))
+            ProgressView()
+                .tint(Color(red: 0.08, green: 0.08, blue: 0.07))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(red: 0.949, green: 0.937, blue: 0.91))
     }
 
     @ViewBuilder
-    private func webCommandButton(
-        _ command: RubidiumWebCommand,
-        symbol: String,
-        label: String
-    ) -> some View {
-        let button = Button {
-            RubidiumHaptics.shared.play(.selection)
-            browser.performWebCommand(command)
-        } label: {
-            Image(systemName: symbol)
-                .font(.system(size: 16, weight: .semibold))
-                .frame(width: 44, height: 44)
-                .contentShape(Circle())
-        }
-        .accessibilityLabel(label)
-
-        if #available(iOS 26.0, *) {
-            button
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-        } else {
-            button.buttonStyle(.plain)
-        }
-    }
-
     private var intelligenceButton: some View {
-        RubidiumIntelligenceButton(
-            isActive: isShowingIntelligence,
-            namespace: controlPlaneNamespace
-        ) {
-            RubidiumHaptics.shared.play(.selection)
-            intelligence.refreshAvailability()
-            withAnimation(.smooth(duration: 0.28, extraBounce: 0.04)) {
-                isShowingIntelligence = true
+        if #available(iOS 26.0, *) {
+            RubidiumIntelligenceButton(
+                isActive: isShowingIntelligence,
+                namespace: intelligenceNamespace
+            ) {
+                presentIntelligence()
             }
+        } else {
+            Button(action: presentIntelligence) {
+                Image(systemName: "diamond.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 46, height: 46)
+            }
+            .buttonStyle(.plain)
+            .rubidiumGlass(
+                cornerRadius: 23,
+                interactive: true,
+                tint: Color(red: 0.86, green: 0.05, blue: 0.11).opacity(0.44)
+            )
+            .accessibilityLabel("Open Rubidium Intelligence")
         }
     }
 
-    private func errorCard(_ message: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "wifi.exclamationmark")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(Color(red: 0.94, green: 0.12, blue: 0.16))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Rubidium is offline")
-                    .font(.system(size: 14, weight: .semibold))
-                Text(message)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            Spacer(minLength: 8)
-
-            Button("Retry") {
-                RubidiumHaptics.shared.play(.action)
-                browser.reload()
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Color(red: 0.94, green: 0.12, blue: 0.16))
-            .controlSize(.small)
+    private func presentIntelligence() {
+        RubidiumHaptics.shared.play(.selection)
+        intelligence.refreshAvailability()
+        withAnimation(.smooth(duration: 0.28, extraBounce: 0.04)) {
+            isShowingIntelligence = true
         }
-        .padding(14)
-        .rubidiumContentPanel(cornerRadius: 14)
-        .shadow(color: .black.opacity(0.16), radius: 18, y: 8)
     }
 }

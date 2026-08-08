@@ -3,18 +3,70 @@ import AuthenticationServices
 import UIKit
 import WebKit
 
+enum RubidiumSessionState: Equatable {
+    case loading
+    case signedOut
+    case signedIn(email: String)
+}
+
+struct RubidiumAPIError: LocalizedError {
+    let status: Int
+    let message: String
+    let code: String?
+
+    var errorDescription: String? { message }
+}
+
+private struct RubidiumAPIEnvelope: Decodable {
+    let ok: Bool
+    let status: Int
+    let body: String
+}
+
+private struct RubidiumSessionEnvelope: Decodable {
+    struct User: Decodable {
+        let email: String
+    }
+
+    let authenticated: Bool
+    let user: User?
+}
+
+private struct RubidiumOneTimeTokenEnvelope: Decodable {
+    let token: String
+}
+
+private struct RubidiumConfigurationEnvelope: Decodable {
+    struct Providers: Decodable {
+        let google: Bool
+        let microsoft: Bool
+    }
+
+    let providers: Providers
+}
+
+private struct RubidiumEmptyResponse: Decodable {}
+
 @MainActor
 final class RubidiumBrowserModel: ObservableObject {
     @Published var isLoading = true
     @Published var progress = 0.08
     @Published var errorMessage: String?
     @Published var isMailWorkspace = false
+    @Published var sessionState: RubidiumSessionState = .loading
+    @Published var googleIdentityAvailable = false
+    @Published var microsoftIdentityAvailable = false
 
     weak var webView: WKWebView?
+    fileprivate var nativeAuthAction: ((String, String, String?) -> Void)?
 
     var appURL: URL {
         let configured = Bundle.main.object(forInfoDictionaryKey: "RBMailAppURL") as? String
         return URL(string: configured ?? "https://rbmail-production.up.railway.app")!
+    }
+
+    var bootstrapURL: URL {
+        appURL.appendingPathComponent("api/session")
     }
 
     func reload() {
@@ -66,6 +118,169 @@ final class RubidiumBrowserModel: ObservableObject {
             "document.querySelector('\(selector)')?.click()"
         )
     }
+
+    func openThread(_ id: String) {
+        guard let webView,
+              let idJSON = try? Self.javascriptString(id) else { return }
+        webView.evaluateJavaScript(
+            "document.querySelector(`[data-thread-id=\"${CSS.escape(\(idJSON))}\"]`)?.click()"
+        )
+    }
+
+    func signIn(with provider: String) {
+        errorMessage = nil
+        nativeAuthAction?("identity", provider, nil)
+    }
+
+    func connect(_ provider: String) async {
+        do {
+            let payload: RubidiumOneTimeTokenEnvelope = try await api(
+                "/api/auth/one-time-token/generate"
+            )
+            nativeAuthAction?("connect", provider, payload.token)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func passwordAuthentication(
+        email: String,
+        password: String,
+        createAccount: Bool
+    ) async throws {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var body: [String: Any] = [
+            "email": normalizedEmail,
+            "password": password,
+        ]
+        if createAccount {
+            body["name"] = normalizedEmail.split(separator: "@").first.map(String.init) ?? "Rubidium user"
+        }
+        let path = createAccount
+            ? "/api/auth/sign-up/email"
+            : "/api/auth/sign-in/email"
+        let _: RubidiumEmptyResponse = try await api(path, method: "POST", body: body)
+        webView?.load(URLRequest(url: appURL))
+        await refreshSession()
+    }
+
+    func signOut() async {
+        do {
+            let _: RubidiumEmptyResponse = try await api(
+                "/api/auth/sign-out",
+                method: "POST",
+                body: [:]
+            )
+        } catch {
+            // Clear the native state even when the network disappears; the
+            // server session will be checked again on the next launch.
+        }
+        sessionState = .signedOut
+        webView?.load(URLRequest(url: appURL.appendingPathComponent("settings")))
+    }
+
+    func refreshSession() async {
+        guard webView != nil else { return }
+        do {
+            let payload: RubidiumSessionEnvelope = try await api("/api/session")
+            if payload.authenticated, let email = payload.user?.email {
+                sessionState = .signedIn(email: email)
+            } else {
+                sessionState = .signedOut
+            }
+        } catch {
+            if sessionState == .loading {
+                errorMessage = error.localizedDescription
+                // Never strand the user behind the launch screen. The web
+                // session may be unavailable or still warming up, but the
+                // native sign-in surface remains usable and can retry.
+                sessionState = .signedOut
+            }
+        }
+    }
+
+    func refreshConfiguration() async {
+        do {
+            let payload: RubidiumConfigurationEnvelope = try await api("/api/config")
+            googleIdentityAvailable = payload.providers.google
+            microsoftIdentityAvailable = payload.providers.microsoft
+        } catch {
+            googleIdentityAvailable = false
+            microsoftIdentityAvailable = false
+        }
+    }
+
+    func api<T: Decodable>(
+        _ path: String,
+        method: String = "GET",
+        body: [String: Any]? = nil
+    ) async throws -> T {
+        guard let webView else {
+            throw RubidiumAPIError(status: 0, message: "Rubidium is still starting.", code: nil)
+        }
+        let bodyText: String
+        let hasBody: Bool
+        if let body {
+            let data = try JSONSerialization.data(withJSONObject: body)
+            bodyText = String(decoding: data, as: UTF8.self)
+            hasBody = true
+        } else {
+            bodyText = ""
+            hasBody = false
+        }
+        // evaluateJavaScript cannot bridge a JavaScript Promise back to Swift
+        // and reports "unsupported type". callAsyncJavaScript awaits the
+        // fetch inside WebKit while preserving the WKWebView's HTTP-only
+        // Better Auth session cookie.
+        let script = """
+        const response = await fetch(path, {
+          method,
+          credentials: 'include',
+          headers: hasBody ? {'content-type': 'application/json'} : undefined,
+          body: hasBody ? bodyText : undefined
+        });
+        const text = await response.text();
+        return JSON.stringify({ok: response.ok, status: response.status, body: text});
+        """
+        let result = try await webView.callAsyncJavaScript(
+            script,
+            arguments: [
+                "path": path,
+                "method": method,
+                "hasBody": hasBody,
+                "bodyText": bodyText,
+            ],
+            in: nil,
+            contentWorld: .page
+        )
+        guard let raw = result as? String,
+              let rawData = raw.data(using: .utf8) else {
+            throw RubidiumAPIError(status: 0, message: "Rubidium returned an unreadable response.", code: nil)
+        }
+        let envelope = try JSONDecoder().decode(RubidiumAPIEnvelope.self, from: rawData)
+        let data = Data(envelope.body.utf8)
+        if !envelope.ok {
+            let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            throw RubidiumAPIError(
+                status: envelope.status,
+                message: payload?["error"] as? String ?? "Request failed (\(envelope.status)).",
+                code: payload?["code"] as? String
+            )
+        }
+        if data.isEmpty, let empty = "{}".data(using: .utf8) {
+            return try JSONDecoder().decode(T.self, from: empty)
+        }
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    private static func javascriptString(_ value: String) throws -> String {
+        // JSONSerialization rejects scalar top-level values unless fragment
+        // options are explicitly enabled. JSONEncoder produces the exact
+        // JavaScript string literal we need and is safe for arbitrary OAuth
+        // tokens, thread identifiers, and paths.
+        let data = try JSONEncoder().encode(value)
+        return String(decoding: data, as: UTF8.self)
+    }
 }
 
 enum RubidiumWebCommand {
@@ -101,7 +316,7 @@ struct RubidiumWebView: UIViewRepresentable {
         webView.uiDelegate = context.coordinator
         // Horizontal gestures belong to Rubidium's mail actions, not browser history.
         webView.allowsBackForwardNavigationGestures = false
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.contentInsetAdjustmentBehavior = .automatic
         webView.scrollView.keyboardDismissMode = .interactive
         webView.scrollView.backgroundColor = UIColor(
             red: 0.949,
@@ -113,8 +328,14 @@ struct RubidiumWebView: UIViewRepresentable {
         webView.isOpaque = false
 
         context.coordinator.observeProgress(of: webView)
+        model.nativeAuthAction = { [weak coordinator = context.coordinator] action, provider, token in
+            coordinator?.beginAuthentication(action: action, provider: provider, token: token)
+        }
         model.webView = webView
-        webView.load(URLRequest(url: model.appURL, cachePolicy: .useProtocolCachePolicy))
+        // Establish the first-party WKWebView origin with a tiny JSON route.
+        // Loading the complete Next.js inbox just to discover that a new user
+        // is signed out can add several seconds to cold launch.
+        webView.load(URLRequest(url: model.bootstrapURL, cachePolicy: .reloadIgnoringLocalCacheData))
         return webView
     }
 
@@ -193,6 +414,17 @@ struct RubidiumWebView: UIViewRepresentable {
             model.progress = 1
             model.isLoading = false
             model.errorMessage = nil
+            if webView.url?.path == "/login" {
+                model.sessionState = .signedOut
+            }
+            Task {
+                await model.refreshConfiguration()
+                await model.refreshSession()
+                if webView.url?.path == "/api/session",
+                   case .signedIn = model.sessionState {
+                    webView.load(URLRequest(url: model.appURL))
+                }
+            }
         }
 
         func webView(
@@ -240,7 +472,7 @@ struct RubidiumWebView: UIViewRepresentable {
                 .first { $0.isKeyWindow } ?? ASPresentationAnchor()
         }
 
-        private func beginAuthentication(action: String, provider: String, token: String?) {
+        fileprivate func beginAuthentication(action: String, provider: String, token: String?) {
             guard ["google", "microsoft"].contains(provider) else { return }
             let path: String
             var queryItems: [URLQueryItem] = []
@@ -326,8 +558,8 @@ struct RubidiumWebView: UIViewRepresentable {
             let destination = values["destination"]?.isEmpty == false
                 ? values["destination"]!
                 : "/"
-            guard let tokenData = try? JSONSerialization.data(withJSONObject: token),
-                  let destinationData = try? JSONSerialization.data(withJSONObject: destination),
+            guard let tokenData = try? JSONEncoder().encode(token),
+                  let destinationData = try? JSONEncoder().encode(destination),
                   let tokenJSON = String(data: tokenData, encoding: .utf8),
                   let destinationJSON = String(data: destinationData, encoding: .utf8) else { return }
             let script = """
