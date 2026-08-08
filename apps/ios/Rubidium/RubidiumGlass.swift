@@ -32,16 +32,16 @@ struct RubidiumIntelligenceButton: View {
         Button(action: action) {
             Label("Rubidium Intelligence", systemImage: isActive ? "sparkles" : "diamond.fill")
                 .labelStyle(.iconOnly)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 50, height: 50)
+                .frame(width: 44, height: 44)
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .rubidiumGlass(
-            cornerRadius: 25,
+            cornerRadius: 22,
             interactive: true,
-            tint: Color(red: 0.86, green: 0.05, blue: 0.11).opacity(0.56)
+            tint: Color(red: 0.86, green: 0.05, blue: 0.11).opacity(0.44)
         )
         .scaleEffect(isActive ? 1.045 : 1)
         .animation(.spring(response: 0.34, dampingFraction: 0.72), value: isActive)

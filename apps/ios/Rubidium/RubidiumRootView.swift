@@ -1,9 +1,11 @@
 import SwiftUI
+import UIKit
 
 struct RubidiumRootView: View {
     @EnvironmentObject private var browser: RubidiumBrowserModel
     @StateObject private var intelligence = RubidiumIntelligenceModel()
     @State private var isShowingIntelligence = false
+    @State private var isKeyboardVisible = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -13,18 +15,21 @@ struct RubidiumRootView: View {
             RubidiumWebView(model: browser)
                 .ignoresSafeArea()
 
-            VStack {
-                Spacer()
-                HStack {
+            if !isKeyboardVisible {
+                VStack {
                     Spacer()
-                    RubidiumIntelligenceButton(isActive: isShowingIntelligence) {
-                        RubidiumHaptics.shared.play(.selection)
-                        intelligence.refreshAvailability()
-                        isShowingIntelligence = true
+                    HStack {
+                        Spacer()
+                        RubidiumIntelligenceButton(isActive: isShowingIntelligence) {
+                            RubidiumHaptics.shared.play(.selection)
+                            intelligence.refreshAvailability()
+                            isShowingIntelligence = true
+                        }
                     }
+                    .padding(.trailing, 12)
+                    .padding(.bottom, 14)
                 }
-                .padding(.trailing, 16)
-                .padding(.bottom, 18)
+                .transition(.scale(scale: 0.82, anchor: .bottomTrailing).combined(with: .opacity))
             }
 
             if browser.isLoading {
@@ -63,6 +68,22 @@ struct RubidiumRootView: View {
         }
         .onAppear {
             RubidiumHaptics.shared.prepare()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
+            withAnimation(.easeOut(duration: 0.16)) {
+                isKeyboardVisible = true
+            }
+            let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+            let overlap = keyboardFrame.map {
+                max(0, UIScreen.main.bounds.height - $0.minY)
+            } ?? 0
+            browser.stabilizeViewportAfterKeyboardChange(overlap: overlap)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                isKeyboardVisible = false
+            }
+            browser.stabilizeViewportAfterKeyboardChange(overlap: 0)
         }
     }
 

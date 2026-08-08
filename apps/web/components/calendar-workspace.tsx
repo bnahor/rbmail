@@ -183,7 +183,8 @@ export function CalendarWorkspace({
           throw new Error(payload.error || "Calendar sync failed.");
         }
       }
-      const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const from = new Date();
+      from.setHours(0, 0, 0, 0);
       const to = new Date();
       to.setMonth(to.getMonth() + 6);
       const [sourceResponse, eventResponse] = await Promise.all([
@@ -220,7 +221,7 @@ export function CalendarWorkspace({
   }
 
   useEffect(() => {
-    void loadAgenda(false).then(() => void loadAgenda(true));
+    void loadAgenda(false);
   }, []);
 
   useEffect(() => {

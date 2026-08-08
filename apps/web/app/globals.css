@@ -33,6 +33,15 @@ body {
   overflow: hidden;
 }
 
+html:has(.mail-stage),
+body:has(.mail-stage) {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
 button,
 input,
 textarea {
@@ -3434,7 +3443,10 @@ textarea:focus-visible {
 
 @media (max-width: 720px) {
   .settings-stage {
-    padding: 20px 14px;
+    padding:
+      calc(env(safe-area-inset-top) + 18px)
+      14px
+      calc(env(safe-area-inset-bottom) + 20px);
   }
 
   .auth-stage {
@@ -3541,6 +3553,8 @@ textarea:focus-visible {
 
   .settings-header {
     grid-template-columns: 1fr auto;
+    gap: 12px;
+    margin-bottom: 24px;
   }
 
   .settings-header > div:not(.settings-header-actions) {
@@ -3550,6 +3564,38 @@ textarea:focus-visible {
 
   .settings-header-actions {
     justify-content: flex-end;
+    gap: 6px;
+  }
+
+  .settings-back,
+  .settings-sync-all,
+  .settings-primary,
+  .settings-icon-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .settings-header h1 {
+    font-size: clamp(42px, 15vw, 56px);
+  }
+
+  .settings-card {
+    min-height: 116px;
+    padding: 17px 15px;
+  }
+
+  .settings-card h2,
+  .section-title h2 {
+    font-size: 15px;
+  }
+
+  .settings-card p,
+  .section-title p,
+  .connected-list span,
+  .connected-list small,
+  .settings-privacy {
+    font-size: 11px;
+    line-height: 1.45;
   }
 
   .settings-grid {
@@ -3562,10 +3608,19 @@ textarea:focus-visible {
 
   .connected-list article {
     grid-template-columns: auto 1fr auto auto;
+    gap: 6px;
+    padding: 14px;
   }
 
   .account-status {
     display: none;
+  }
+
+  .settings-stage input,
+  .settings-stage select,
+  .settings-stage textarea,
+  .unlock-card input {
+    font-size: 16px;
   }
 }
 
@@ -4571,7 +4626,8 @@ textarea:focus-visible {
     inset: 0 auto 0 0;
     width: min(286px, 86vw);
     transform: translateX(-102%);
-    padding-bottom: max(15px, env(safe-area-inset-bottom));
+    padding-top: calc(env(safe-area-inset-top) + 12px);
+    padding-bottom: calc(env(safe-area-inset-bottom) + 12px);
     transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
@@ -4599,6 +4655,73 @@ textarea:focus-visible {
     height: 100dvh;
   }
 
+  .mail-stage .inbox-header {
+    padding:
+      calc(env(safe-area-inset-top) + 10px)
+      16px
+      13px;
+  }
+
+  .mail-stage .inbox-title-row {
+    min-height: 44px;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .mail-stage .inbox-title-row > div {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .mail-stage .inbox-title-row .icon-button {
+    flex: 0 0 44px;
+    margin-left: -6px;
+  }
+
+  .mail-stage .today-label {
+    overflow: hidden;
+    margin-bottom: 2px;
+    font-size: 11px;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mail-stage .inbox-title-row h1 {
+    overflow: hidden;
+    font-size: 29px;
+    line-height: 1.04;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mail-stage .all-account-pill {
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    flex: 0 0 44px;
+    justify-content: center;
+    overflow: hidden;
+    border-radius: 14px;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .mail-stage .all-account-pill svg {
+    display: none;
+  }
+
+  .mail-stage .search-trigger {
+    margin-top: 13px;
+  }
+
+  .mail-stage .search-trigger span {
+    overflow: hidden;
+    font-size: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .mail-stage .thread-panel {
     position: absolute;
     z-index: 20;
@@ -4614,10 +4737,10 @@ textarea:focus-visible {
   }
 
   .mail-stage .thread-header {
-    min-height: 72px;
+    min-height: calc(env(safe-area-inset-top) + 72px);
     gap: 6px;
     padding:
-      max(8px, env(safe-area-inset-top))
+      calc(env(safe-area-inset-top) + 8px)
       9px
       8px;
   }
@@ -4629,6 +4752,7 @@ textarea:focus-visible {
   .mail-stage .thread-heading h2 {
     max-width: none;
     font-size: 20px;
+    line-height: 1.12;
   }
 
   .mail-stage .thread-actions {
@@ -4662,8 +4786,13 @@ textarea:focus-visible {
   .mail-stage .reply-dock {
     padding:
       6px
-      8px
-      max(7px, env(safe-area-inset-bottom));
+      68px
+      calc(
+        max(7px, env(safe-area-inset-bottom)) +
+        var(--rubidium-keyboard-overlap, 0px)
+      )
+      8px;
+    transition: padding-bottom 180ms ease;
   }
 
   .mail-stage .replying-to {
@@ -4746,6 +4875,48 @@ textarea:focus-visible {
       max(10px, env(safe-area-inset-bottom));
   }
 
+  .mail-stage .search-layer {
+    align-items: flex-end;
+    padding:
+      calc(env(safe-area-inset-top) + 8px)
+      0
+      0;
+  }
+
+  .mail-stage .search-command {
+    width: 100%;
+    max-height: calc(100dvh - env(safe-area-inset-top) - 8px);
+    border-width: 1px 0 0;
+    border-radius: 24px 24px 0 0;
+  }
+
+  .mail-stage .search-command > header {
+    min-height: 64px;
+    padding-inline: 16px;
+  }
+
+  .mail-stage .search-command input,
+  .mail-stage .compose-modal input,
+  .mail-stage .compose-modal select,
+  .mail-stage .compose-modal textarea,
+  .mail-stage .reply-box textarea,
+  .mail-stage .calendar-compose input,
+  .mail-stage .calendar-compose select,
+  .mail-stage .calendar-compose textarea {
+    font-size: 16px;
+  }
+
+  .mail-stage .search-results {
+    max-height: 43dvh;
+  }
+
+  .mail-stage .search-command > footer {
+    padding-bottom: calc(
+      env(safe-area-inset-bottom) + 8px +
+      var(--rubidium-keyboard-overlap, 0px)
+    );
+  }
+
   .mail-stage .search-command,
   .mail-stage .compose-modal {
     max-height: calc(
@@ -4761,6 +4932,39 @@ textarea:focus-visible {
 
   .mail-stage .compose-modal > footer button {
     min-height: 44px;
+  }
+
+  /* Keep search as a bottom sheet after the shared modal rules above. */
+  .mail-stage .search-command {
+    width: 100%;
+    max-height: calc(100dvh - env(safe-area-inset-top) - 8px);
+    border-width: 1px 0 0;
+    border-radius: 24px 24px 0 0;
+  }
+
+  .mail-stage .calendar-new-button {
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    overflow: hidden;
+    border-radius: 14px;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .mail-stage .calendar-new-button svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .mail-stage .calendar-sync-line button,
+  .mail-stage .calendar-join,
+  .mail-stage .calendar-rsvp button {
+    min-height: 44px;
+  }
+
+  .mail-stage .calendar-event-list {
+    padding-bottom: calc(84px + env(safe-area-inset-bottom));
   }
 }
 

@@ -24,6 +24,20 @@ final class RubidiumBrowserModel: ObservableObject {
         }
     }
 
+    func stabilizeViewportAfterKeyboardChange(overlap: CGFloat) {
+        let delays = [0.0, 0.08, 0.24, 0.42]
+        for delay in delays {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let webView = self?.webView else { return }
+                webView.scrollView.setContentOffset(.zero, animated: false)
+                let clampedOverlap = max(0, overlap)
+                webView.evaluateJavaScript(
+                    "document.documentElement.style.setProperty('--rubidium-keyboard-overlap', '\(clampedOverlap)px'); window.scrollTo(0, 0)"
+                )
+            }
+        }
+    }
+
     func visibleMailContext() async -> String {
         guard let webView else { return "" }
         let script = """
@@ -100,6 +114,13 @@ struct RubidiumWebView: UIViewRepresentable {
         if (/delete|disconnect|remove/.test(text)) send('destructive');
         else if (/send|reply|archive|sync|connect|schedule|join|rsvp|save|create/.test(text)) send('action');
         else if (/inbox|current|today|accounts|settings|calendar/.test(text)) send('selection');
+      }, true);
+      document.addEventListener('focusin', event => {
+        if (!event.target?.matches?.('input, textarea, select')) return;
+        const restoreViewport = () => window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+        requestAnimationFrame(restoreViewport);
+        setTimeout(restoreViewport, 80);
+        setTimeout(restoreViewport, 260);
       }, true);
       const seen = new WeakSet();
       new MutationObserver(records => {

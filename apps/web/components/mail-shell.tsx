@@ -1228,7 +1228,13 @@ export function MailShell() {
                 <Menu size={20} />
               </IconButton>
               <div>
-                <span className="today-label">Monday, 27 July</span>
+                <span className="today-label">
+                  {new Date().toLocaleDateString([], {
+                    weekday: "long",
+                    month: "long",
+                    day: "numeric",
+                  })}
+                </span>
                 <h1>
                   {views.find((view) => view.id === activeView)?.label ??
                     "Everything"}
