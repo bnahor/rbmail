@@ -105,10 +105,41 @@ final class RubidiumIntelligenceModel: ObservableObject {
             result = try await generate(action: action, context: context)
             RubidiumHaptics.shared.play(.intelligenceComplete)
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = message(for: error)
             RubidiumHaptics.shared.play(.error)
         }
         isGenerating = false
+    }
+
+    private func message(for error: Error) -> String {
+        #if targetEnvironment(simulator)
+        return "On-device generation requires a supported physical iPhone or iPad."
+        #else
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, *),
+           let generationError = error as? LanguageModelSession.GenerationError {
+            switch generationError {
+            case .exceededContextWindowSize:
+                return "This conversation is too long for the on-device model. Open a smaller thread and try again."
+            case .assetsUnavailable:
+                return "Apple’s on-device model is still preparing. Try again after its download completes."
+            case .guardrailViolation, .refusal:
+                return "The on-device model couldn’t help with this content."
+            case .unsupportedGuide, .decodingFailure:
+                return "Rubidium Intelligence couldn’t format this result. Please try again."
+            case .unsupportedLanguageOrLocale:
+                return "The visible conversation uses a language the on-device model doesn’t currently support."
+            case .rateLimited:
+                return "The on-device model needs a moment. Please try again shortly."
+            case .concurrentRequests:
+                return "Rubidium Intelligence is already working on another request."
+            @unknown default:
+                return "Rubidium Intelligence couldn’t finish this request. Please try again."
+            }
+        }
+        #endif
+        return "Rubidium Intelligence couldn’t finish this request. Please try again."
+        #endif
     }
 
     private func generate(
