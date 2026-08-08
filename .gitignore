@@ -15,3 +15,4 @@ data
 *.sqlite-shm
 *.sqlite-wal
 apps/desktop/src-tauri/target
+**/xcuserdata/
