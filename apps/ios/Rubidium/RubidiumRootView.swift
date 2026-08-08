@@ -10,7 +10,6 @@ struct RubidiumRootView: View {
     @StateObject private var security = RubidiumAppLockModel()
     @State private var selectedTab: RubidiumNativeTab = .mail
     @State private var isShowingIntelligence = false
-    @Namespace private var intelligenceNamespace
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -25,7 +24,7 @@ struct RubidiumRootView: View {
                 security: security,
                 selection: $selectedTab,
                 mail: AnyView(RubidiumWebView(model: browser)),
-                intelligence: AnyView(intelligenceButton)
+                presentIntelligence: presentIntelligence
             )
             .opacity(isSignedIn ? 1 : 0)
             .allowsHitTesting(isSignedIn)
@@ -71,8 +70,8 @@ struct RubidiumRootView: View {
             nativeStore.attach(browser)
             RubidiumHaptics.shared.prepare()
         }
-        .onChange(of: browser.sessionState) { _, state in
-            guard case .signedIn = state else { return }
+        .onChange(of: browser.contentRevision) { _, _ in
+            guard isSignedIn else { return }
             Task { await nativeStore.loadAll(force: true) }
         }
         .onChange(of: browser.connectionRevision) { _, _ in
@@ -111,32 +110,6 @@ struct RubidiumRootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(uiColor: .systemBackground))
-    }
-
-    @ViewBuilder
-    private var intelligenceButton: some View {
-        if #available(iOS 26.0, *) {
-            RubidiumIntelligenceButton(
-                isActive: isShowingIntelligence,
-                namespace: intelligenceNamespace
-            ) {
-                presentIntelligence()
-            }
-        } else {
-            Button(action: presentIntelligence) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 46, height: 46)
-            }
-            .buttonStyle(.plain)
-            .rubidiumGlass(
-                cornerRadius: 23,
-                interactive: true,
-                tint: Color(red: 0.86, green: 0.05, blue: 0.11).opacity(0.44)
-            )
-            .accessibilityLabel("Open Rubidium Intelligence")
-        }
     }
 
     private func presentIntelligence() {

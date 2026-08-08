@@ -844,6 +844,13 @@ export function MailShell() {
       void toggleThreadRead(id);
       return;
     }
+    // The native shell already provides the sole persistent control plane.
+    // A partially revealed archive rail created a second archive affordance
+    // and left the row displaced behind the iOS navigation bar.
+    if (document.documentElement.dataset.rubidiumNative === "true") {
+      setSwipedThreadId(null);
+      return;
+    }
     setSwipedThreadId(deltaX < 0 ? id : null);
   }
 

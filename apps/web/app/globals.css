@@ -5156,14 +5156,28 @@ html[data-rubidium-theme="dark"] .mail-stage select {
   }
 }
 
-/* In the iOS app, SwiftUI owns every top-level destination. The embedded
-   mailbox is deliberately reduced to mail content so it cannot surface a
-   second drawer, settings route, or bottom navigation plane. */
+/* In the iOS app, SwiftUI owns every top-level destination at every size and
+   orientation. The embedded mailbox is content only: no duplicate drawer,
+   archive rail, settings route, or web bottom navigation plane. */
+html[data-rubidium-native="true"] .mail-stage .sidebar,
+html[data-rubidium-native="true"] .mail-stage .menu-scrim,
+html[data-rubidium-native="true"] .mail-stage .mobile-tabbar,
+html[data-rubidium-native="true"] .mail-stage .row-action-rail {
+  display: none !important;
+}
+
+html[data-rubidium-native="true"] .mail-stage .thread-swipe-wrap.swiped .thread-row {
+  --swipe-offset: 0px;
+}
+
+@media (min-width: 700px) {
+  html[data-rubidium-native="true"] .mail-stage .mail-app {
+    grid-template-columns: minmax(300px, 390px) minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 699px) {
-  html[data-rubidium-native="true"] .mail-stage .sidebar,
-  html[data-rubidium-native="true"] .mail-stage .menu-scrim,
-  html[data-rubidium-native="true"] .mail-stage .inbox-title-row > .mobile-only,
-  html[data-rubidium-native="true"] .mail-stage .mobile-tabbar {
+  html[data-rubidium-native="true"] .mail-stage .inbox-title-row > .mobile-only {
     display: none !important;
   }
 

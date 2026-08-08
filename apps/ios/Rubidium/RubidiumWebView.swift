@@ -57,6 +57,7 @@ final class RubidiumBrowserModel: ObservableObject {
     @Published var googleIdentityAvailable = false
     @Published var microsoftIdentityAvailable = false
     @Published var connectionRevision = 0
+    @Published var contentRevision = 0
 
     weak var webView: WKWebView?
     fileprivate var nativeAuthAction: ((String, String, String?) -> Void)?
@@ -465,6 +466,9 @@ struct RubidiumWebView: UIViewRepresentable {
                lastConnectedURL != url.absoluteString {
                 lastConnectedURL = url.absoluteString
                 model.connectionRevision += 1
+            }
+            if webView.url?.path != "/api/session" {
+                model.contentRevision += 1
             }
             Task {
                 await model.refreshConfiguration()

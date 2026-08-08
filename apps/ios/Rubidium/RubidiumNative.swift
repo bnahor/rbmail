@@ -231,7 +231,7 @@ struct RubidiumNativeShell: View {
     @ObservedObject var security: RubidiumAppLockModel
     @Binding var selection: RubidiumNativeTab
     let mail: AnyView
-    let intelligence: AnyView
+    let presentIntelligence: () -> Void
 
     var body: some View {
         GeometryReader { geometry in
@@ -268,7 +268,7 @@ struct RubidiumNativeShell: View {
 
             RubidiumNativeNavigationBar(
                 selection: $selection,
-                intelligence: intelligence
+                presentIntelligence: presentIntelligence
             )
             .padding(.horizontal, 12)
             .padding(.bottom, geometry.safeAreaInsets.bottom + 6)
@@ -284,22 +284,14 @@ struct RubidiumNativeShell: View {
 
 private struct RubidiumNativeNavigationBar: View {
     @Binding var selection: RubidiumNativeTab
-    let intelligence: AnyView
+    let presentIntelligence: () -> Void
     @Namespace private var navigationNamespace
 
     var body: some View {
         HStack(spacing: 2) {
-            destination(.mail, title: "Mail", symbol: "tray", selectedSymbol: "tray.full.fill")
+            destination(.mail, title: "Mail", symbol: "envelope", selectedSymbol: "envelope.fill")
             destination(.today, title: "Today", symbol: "calendar", selectedSymbol: "calendar")
-
-            VStack(spacing: 1) {
-                intelligence
-                    .frame(width: 44, height: 34)
-                Text("AI")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, minHeight: 52)
+            intelligenceAction
 
             destination(
                 .search,
@@ -317,7 +309,28 @@ private struct RubidiumNativeNavigationBar: View {
         .padding(5)
         .frame(maxWidth: 460)
         .rubidiumGlass(cornerRadius: 27, interactive: true)
+        .dynamicTypeSize(.xSmall ... .accessibility1)
         .accessibilityElement(children: .contain)
+    }
+
+    private var intelligenceAction: some View {
+        Button(action: presentIntelligence) {
+            VStack(spacing: 2) {
+                Image(systemName: "sparkles")
+                    .contentTransition(.symbolEffect(.replace))
+                    .font(.system(size: 17, weight: .semibold))
+                Text("AI")
+                    .font(.system(size: 10, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+            .foregroundStyle(Color.secondary)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Rubidium Intelligence")
+        .accessibilityHint("Summarize, find next steps, or draft a reply using Apple's on-device model")
     }
 
     private func destination(
@@ -339,6 +352,7 @@ private struct RubidiumNativeNavigationBar: View {
                 Text(title)
                     .font(.system(size: 10, weight: .semibold))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.82)
             }
             .foregroundStyle(selection == tab ? Color.primary : Color.secondary)
             .frame(maxWidth: .infinity, minHeight: 52)
