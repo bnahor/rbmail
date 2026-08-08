@@ -9,6 +9,7 @@ import {
   updateAccountToken,
   upsertMessage,
 } from "@/lib/server/db";
+import { composioProxyFetch } from "@/lib/server/composio";
 import {
   cleanText,
   decodeBase64Url,
@@ -59,6 +60,13 @@ async function gmailFetch<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
+  if (account.authBackend === "composio") {
+    return composioProxyFetch<T>(
+      account,
+      `https://gmail.googleapis.com/gmail/v1${path}`,
+      init,
+    );
+  }
   const token = await accessToken(account);
   const response = await fetch(`https://gmail.googleapis.com/gmail/v1${path}`, {
     ...init,

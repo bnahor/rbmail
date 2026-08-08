@@ -56,7 +56,7 @@ export const auth = betterAuth({
   },
   emailAndPassword: {
     enabled: true,
-    disableSignUp: true,
+    disableSignUp: false,
     minPasswordLength: 8,
     maxPasswordLength: 128,
   },
@@ -66,10 +66,10 @@ export const auth = betterAuth({
     accountLinking: {
       enabled: true,
       trustedProviders: ["google", "microsoft"],
-      // Password registration is disabled above. This lets a verified provider
-      // reclaim and link a matching account created before social sign-in
-      // shipped, while preventing new unverified password registrations.
-      requireLocalEmailVerified: false,
+      // A verified provider may reclaim and link a matching password account.
+      // Mailbox OAuth remains a separate Composio connection, so identity and
+      // provider permissions can evolve independently.
+      requireLocalEmailVerified: true,
       updateUserInfoOnLink: true,
     },
   },

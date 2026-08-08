@@ -13,9 +13,10 @@ The repository contains:
 
 - a responsive Next.js mail client with desktop and mobile interaction patterns;
 - encrypted local SQLite storage;
-- multi-user Google/Microsoft sign-in with tenant-isolated mail and calendars;
-- Gmail OAuth and Gmail History synchronization;
-- Microsoft identity OAuth and Graph delta synchronization;
+- multi-user Better Auth sessions with tenant-isolated mail and calendars;
+- Composio-managed Gmail and Outlook connections, credential refresh, and
+  authenticated provider requests;
+- Gmail History and Microsoft Graph delta synchronization;
 - a provider-neutral normalized mail model;
 - a unified Today agenda across writable Google and Outlook calendars;
 - Calendar-backed Google Meet and Microsoft Teams event creation;
@@ -27,8 +28,9 @@ mail as soon as an account is added.
 
 ## Local setup
 
-Requirements: Node.js 22.13+, pnpm 10+, and OAuth web-app credentials for the
-providers you want to connect.
+Requirements: Node.js 22.22.3+, pnpm 10+, and a Composio project API key for
+managed Gmail and Outlook connections. Direct provider OAuth credentials remain
+an optional rollback path.
 
 ```bash
 pnpm install
@@ -39,14 +41,30 @@ pnpm dev
 Open `http://localhost:3000/settings`, connect an account, and keep the local
 server running while OAuth completes.
 
-Rubidium uses Better Auth with Google and Microsoft as its primary login. The
-first provider consent creates an isolated Rubidium user, connects that same
-mailbox and calendar, and starts synchronization. Existing password accounts
-can still sign in as a fallback, but new password-only registration is disabled.
-Additional Gmail and Outlook accounts can be attached from Settings. Set
-`BETTER_AUTH_SECRET` to at least 32 high-entropy characters in production.
+Rubidium uses Better Auth for product identity and sessions. Users can create an
+email/password account, then connect one or more Gmail or Outlook accounts using
+Composio Connect Links. Composio holds and refreshes provider credentials;
+Rubidium stores only the opaque connected-account ID and its encrypted local
+mail/calendar cache. Optional Google and Microsoft social sign-in can remain
+enabled independently. Set `BETTER_AUTH_SECRET` to at least 32 high-entropy
+characters in production.
 `RBMAIL_ACCESS_PASSWORD` is only a one-time migration code for mail synced by
 the older single-owner release.
+
+### Composio managed connections
+
+Create a current Composio project key (`ak_…`) with read/write access to auth
+configs, connected accounts, toolkits, sessions, and proxy execute. Then set:
+
+```bash
+COMPOSIO_ENABLED=true
+COMPOSIO_API_KEY=ak_your_project_key
+```
+
+Rubidium uses the stable Better Auth user ID as Composio's user ID, enables
+multiple private connections per toolkit, and explicitly selects the opaque
+connected-account ID for every provider request. The Connect Link returns to
+`${APP_URL}/api/composio/callback`.
 
 ### OAuth callbacks
 
@@ -85,10 +103,12 @@ the hardened runtime, submits to Apple, staples the ticket, and verifies the app
 
 ## Privacy model
 
-Mail and calendar content, OAuth refresh tokens, and provider access tokens are
-encrypted before SQLite persistence with AES-256-GCM. A local install creates
-`data/master.key` with owner-only permissions. Hosted deployments must set a
-stable `RBMAIL_MASTER_KEY` and mount `RBMAIL_DATA_DIR` on durable storage.
+Mail and calendar content is encrypted before SQLite persistence with
+AES-256-GCM. For Composio-backed accounts, provider access and refresh tokens do
+not enter Rubidium; Composio stores and refreshes them. Direct-fallback account
+tokens remain encrypted locally. A local install creates `data/master.key` with
+owner-only permissions. Hosted deployments must set a stable
+`RBMAIL_MASTER_KEY` and mount `RBMAIL_DATA_DIR` on durable storage.
 
 This is encryption at rest, not end-to-end encryption: a running rb/mail server
 can decrypt data for its authenticated client. Remote images are blocked by
@@ -98,8 +118,8 @@ default in the UI.
 
 The Dockerfile runs the web app and SQLite database as one service. On Railway,
 mount a persistent volume at `/data`, set `RBMAIL_DATA_DIR=/data`, configure the
-OAuth values from `.env.example`, set `APP_URL` to the public HTTPS domain, and
-set a stable `BETTER_AUTH_SECRET`.
+Composio values from `.env.example`, set `APP_URL` to the public HTTPS domain,
+and set a stable `BETTER_AUTH_SECRET`.
 
 ## Verification
 

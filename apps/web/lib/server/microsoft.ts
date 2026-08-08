@@ -10,6 +10,7 @@ import {
   updateAccountToken,
   upsertMessage,
 } from "@/lib/server/db";
+import { composioProxyFetch } from "@/lib/server/composio";
 import { cleanText, stripHtml } from "@/lib/server/mail-utils";
 import { refreshMicrosoftToken } from "@/lib/server/oauth";
 
@@ -63,10 +64,19 @@ async function graphFetch<T>(
   urlOrPath: string,
   init?: RequestInit,
 ): Promise<T> {
-  const token = await accessToken(account);
   const url = urlOrPath.startsWith("https://")
     ? urlOrPath
     : `https://graph.microsoft.com/v1.0${urlOrPath}`;
+  if (account.authBackend === "composio") {
+    return composioProxyFetch<T>(account, url, {
+      ...init,
+      headers: {
+        prefer: 'outlook.body-content-type="html", odata.maxpagesize=100',
+        ...init?.headers,
+      },
+    });
+  }
+  const token = await accessToken(account);
   const response = await fetch(url, {
     ...init,
     headers: {

@@ -33,6 +33,7 @@ import {
   updateCalendarSourceSync,
   upsertCalendarEvent,
 } from "@/lib/server/db";
+import { composioProxyFetch } from "@/lib/server/composio";
 import {
   refreshGoogleToken,
   refreshMicrosoftToken,
@@ -78,6 +79,17 @@ async function providerFetch<T>(
   url: string,
   init?: RequestInit,
 ): Promise<T> {
+  if (account.authBackend === "composio") {
+    return composioProxyFetch<T>(account, url, {
+      ...init,
+      headers: {
+        ...(account.provider === "microsoft"
+          ? { prefer: 'outlook.timezone="UTC"' }
+          : {}),
+        ...init?.headers,
+      },
+    });
+  }
   const token = await accessToken(account);
   const response = await fetch(url, {
     ...init,

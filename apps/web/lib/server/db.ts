@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { accountCapabilities } from "@/lib/mail/calendar-core";
+import {
+  accountCapabilities,
+  GOOGLE_SCOPES,
+  MICROSOFT_SCOPES,
+} from "@/lib/mail/calendar-core";
 import type {
   CalendarEventDetail,
   CalendarEventSummary,
@@ -51,6 +55,8 @@ function initialize(database: DatabaseSync) {
       provider_account_id TEXT NOT NULL,
       email TEXT NOT NULL,
       display_name TEXT NOT NULL,
+      auth_backend TEXT NOT NULL DEFAULT 'direct',
+      connected_account_id TEXT,
       token_cipher TEXT NOT NULL,
       sync_cursor TEXT,
       status TEXT NOT NULL DEFAULT 'connected',
@@ -93,6 +99,14 @@ function initialize(database: DatabaseSync) {
       user_id TEXT,
       provider TEXT NOT NULL,
       verifier TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS composio_states (
+      state TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      connected_account_id TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
 
@@ -152,6 +166,8 @@ function initialize(database: DatabaseSync) {
   }
   for (const statement of [
     "ALTER TABLE mail_accounts ADD COLUMN user_id TEXT",
+    "ALTER TABLE mail_accounts ADD COLUMN auth_backend TEXT NOT NULL DEFAULT 'direct'",
+    "ALTER TABLE mail_accounts ADD COLUMN connected_account_id TEXT",
     "ALTER TABLE oauth_states ADD COLUMN user_id TEXT",
   ]) {
     try {
@@ -163,6 +179,9 @@ function initialize(database: DatabaseSync) {
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_mail_accounts_user
       ON mail_accounts(user_id, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_accounts_composio_connection
+      ON mail_accounts(connected_account_id)
+      WHERE connected_account_id IS NOT NULL;
   `);
 }
 
@@ -183,6 +202,13 @@ function rowToStoredAccount(row: Record<string, unknown>): StoredAccount {
     providerAccountId: String(row.provider_account_id),
     email: String(row.email),
     displayName: String(row.display_name),
+    authBackend:
+      String(row.auth_backend || "direct") === "composio"
+        ? "composio"
+        : "direct",
+    connectedAccountId: row.connected_account_id
+      ? String(row.connected_account_id)
+      : null,
     token: decryptJson<StoredToken>(String(row.token_cipher)),
     syncCursor: row.sync_cursor ? String(row.sync_cursor) : null,
     status: String(row.status) as StoredAccount["status"],
@@ -225,13 +251,16 @@ export function saveAccount(input: {
   database
     .prepare(
       `INSERT INTO mail_accounts (
-        id, user_id, provider, provider_account_id, email, display_name, token_cipher,
+        id, user_id, provider, provider_account_id, email, display_name,
+        auth_backend, connected_account_id, token_cipher,
         status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'connected', ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, 'direct', NULL, ?, 'connected', ?, ?)
       ON CONFLICT(provider, provider_account_id) DO UPDATE SET
         user_id = excluded.user_id,
         email = excluded.email,
         display_name = excluded.display_name,
+        auth_backend = 'direct',
+        connected_account_id = NULL,
         token_cipher = excluded.token_cipher,
         status = 'connected',
         updated_at = excluded.updated_at`,
@@ -243,6 +272,74 @@ export function saveAccount(input: {
       input.providerAccountId,
       input.email,
       input.displayName,
+      encryptJson(token),
+      now,
+      now,
+    );
+
+  return getAccount(id)!;
+}
+
+export function saveComposioAccount(input: {
+  userId: string;
+  provider: Provider;
+  connectedAccountId: string;
+  providerAccountId: string;
+  email: string;
+  displayName: string;
+}): StoredAccount {
+  const database = getDatabase();
+  const existing = database
+    .prepare(
+      `SELECT * FROM mail_accounts
+       WHERE provider = ? AND provider_account_id = ?`,
+    )
+    .get(input.provider, input.providerAccountId) as
+    | Record<string, unknown>
+    | undefined;
+
+  if (existing?.user_id && String(existing.user_id) !== input.userId) {
+    throw new Error("This mailbox is already connected to another Rubidium user.");
+  }
+
+  const id = existing ? String(existing.id) : randomUUID();
+  const now = Date.now();
+  const scope = (input.provider === "google"
+    ? GOOGLE_SCOPES
+    : MICROSOFT_SCOPES
+  ).join(" ");
+  const token: StoredToken = {
+    accessToken: "",
+    refreshToken: "",
+    expiresAt: Number.MAX_SAFE_INTEGER,
+    scope,
+    tokenType: "Composio",
+  };
+
+  database
+    .prepare(
+      `INSERT INTO mail_accounts (
+        id, user_id, provider, provider_account_id, email, display_name,
+        auth_backend, connected_account_id, token_cipher, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'composio', ?, ?, 'connected', ?, ?)
+      ON CONFLICT(provider, provider_account_id) DO UPDATE SET
+        user_id = excluded.user_id,
+        email = excluded.email,
+        display_name = excluded.display_name,
+        auth_backend = 'composio',
+        connected_account_id = excluded.connected_account_id,
+        token_cipher = excluded.token_cipher,
+        status = 'connected',
+        updated_at = excluded.updated_at`,
+    )
+    .run(
+      id,
+      input.userId,
+      input.provider,
+      input.providerAccountId,
+      input.email,
+      input.displayName,
+      input.connectedAccountId,
       encryptJson(token),
       now,
       now,
@@ -276,7 +373,13 @@ export function getAccounts(userId?: string): StoredAccount[] {
 
 export function getPublicAccounts(userId: string): PublicAccount[] {
   return getAccounts(userId).map(
-    ({ token, syncCursor: _cursor, userId: _userId, ...account }) => {
+    ({
+      token,
+      syncCursor: _cursor,
+      userId: _userId,
+      connectedAccountId: _connection,
+      ...account
+    }) => {
       return {
         ...account,
         capabilities: accountCapabilities(account.provider, token.scope),
@@ -362,6 +465,66 @@ export function consumeOauthState(
     return null;
   }
   return { verifier: row.verifier, userId: row.user_id };
+}
+
+export function saveComposioState(input: {
+  state: string;
+  userId: string;
+  provider: Provider;
+  connectedAccountId: string;
+}) {
+  const database = getDatabase();
+  database
+    .prepare("DELETE FROM composio_states WHERE created_at < ?")
+    .run(Date.now() - 20 * 60 * 1000);
+  database
+    .prepare(
+      `INSERT INTO composio_states (
+        state, user_id, provider, connected_account_id, created_at
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.state,
+      input.userId,
+      input.provider,
+      input.connectedAccountId,
+      Date.now(),
+    );
+}
+
+export function getComposioState(
+  state: string,
+  userId: string,
+): { provider: Provider; connectedAccountId: string } | null {
+  const database = getDatabase();
+  const row = database
+    .prepare(
+      `SELECT user_id, provider, connected_account_id, created_at
+       FROM composio_states WHERE state = ?`,
+    )
+    .get(state) as
+    | {
+        user_id: string;
+        provider: Provider;
+        connected_account_id: string;
+        created_at: number;
+      }
+    | undefined;
+  if (
+    !row ||
+    row.user_id !== userId ||
+    row.created_at < Date.now() - 20 * 60 * 1000
+  ) {
+    return null;
+  }
+  return {
+    provider: row.provider,
+    connectedAccountId: row.connected_account_id,
+  };
+}
+
+export function deleteComposioState(state: string) {
+  getDatabase().prepare("DELETE FROM composio_states WHERE state = ?").run(state);
 }
 
 export function countUnownedAccounts(): number {

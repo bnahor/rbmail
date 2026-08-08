@@ -20,6 +20,11 @@ import { authClient } from "@/lib/auth-client";
 
 type AppConfig = {
   providers: { google: boolean; microsoft: boolean };
+  integrations: {
+    composio: boolean;
+    google: boolean;
+    microsoft: boolean;
+  };
   appUrl: string;
 };
 
@@ -29,6 +34,8 @@ export function SettingsPanel() {
   const [user, setUser] = useState<{ name: string; email: string } | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
+  const [passwordExpanded, setPasswordExpanded] = useState(true);
   const [migrationPasscode, setMigrationPasscode] = useState("");
   const [unownedAccounts, setUnownedAccounts] = useState(0);
   const [accounts, setAccounts] = useState<PublicAccount[]>([]);
@@ -69,13 +76,26 @@ export function SettingsPanel() {
     event.preventDefault();
     setBusy("password");
     setError("");
-    const result = await authClient.signIn.email({
-      email: email.trim(),
-      password,
-    });
+    const normalizedEmail = email.trim().toLowerCase();
+    const result =
+      authMode === "signup"
+        ? await authClient.signUp.email({
+            email: normalizedEmail,
+            password,
+            name: normalizedEmail.split("@")[0] || "Rubidium user",
+          })
+        : await authClient.signIn.email({
+            email: normalizedEmail,
+            password,
+          });
     if (result.error) {
       setBusy(null);
-      setError(result.error.message || "Authentication failed.");
+      setError(
+        result.error.message ||
+          (authMode === "signup"
+            ? "Account creation failed."
+            : "Authentication failed."),
+      );
       return;
     }
     setBusy(null);
@@ -147,8 +167,15 @@ export function SettingsPanel() {
       return;
     }
     setBusy(account.id);
-    await fetch(`/api/accounts/${account.id}`, { method: "DELETE" });
+    const response = await fetch(`/api/accounts/${account.id}`, {
+      method: "DELETE",
+    });
     setBusy(null);
+    if (!response.ok) {
+      const payload = await response.json();
+      setError(payload.error || "Could not disconnect this mailbox.");
+      return;
+    }
     await load();
   }
 
@@ -266,8 +293,32 @@ export function SettingsPanel() {
               </div>
             ) : null}
 
-            <details className="auth-password-fallback">
-              <summary>Use an existing Rubidium password</summary>
+            <details
+              className="auth-password-fallback"
+              open={passwordExpanded}
+              onToggle={(event) => setPasswordExpanded(event.currentTarget.open)}
+            >
+              <summary>
+                {authMode === "signup"
+                  ? "Create a Rubidium account"
+                  : "Use email and password"}
+              </summary>
+              <div className="auth-mode-switch" aria-label="Password account mode">
+                <button
+                  type="button"
+                  className={authMode === "signin" ? "active" : ""}
+                  onClick={() => setAuthMode("signin")}
+                >
+                  Sign in
+                </button>
+                <button
+                  type="button"
+                  className={authMode === "signup" ? "active" : ""}
+                  onClick={() => setAuthMode("signup")}
+                >
+                  Create account
+                </button>
+              </div>
               <form onSubmit={authenticate}>
                 <div className="auth-fields">
                   <label>
@@ -290,9 +341,17 @@ export function SettingsPanel() {
                       <LockKeyhole size={17} />
                       <input
                         type="password"
-                        autoComplete="current-password"
+                        autoComplete={
+                          authMode === "signup"
+                            ? "new-password"
+                            : "current-password"
+                        }
                         minLength={8}
-                        placeholder="Your existing password"
+                        placeholder={
+                          authMode === "signup"
+                            ? "Choose a secure password"
+                            : "Your password"
+                        }
                         required
                         value={password}
                         onChange={(event) => setPassword(event.target.value)}
@@ -307,14 +366,14 @@ export function SettingsPanel() {
                   {busy === "password" ? (
                     <LoaderCircle className="spin" size={17} />
                   ) : null}
-                  Sign in with password
+                  {authMode === "signup" ? "Create account" : "Sign in with password"}
                 </button>
               </form>
             </details>
 
             <small className="auth-note">
-              New users are created automatically. You can connect more
-              mailboxes later without creating another Rubidium account.
+              Sign in once, then connect Gmail or Outlook securely through
+              Composio. Additional inboxes join the same Rubidium workspace.
             </small>
           </section>
         </section>
@@ -399,12 +458,19 @@ export function SettingsPanel() {
               <h2>Google</h2>
               <p>Gmail accounts and Google Workspace.</p>
             </div>
-            {config?.providers.google ? (
-              <a className="settings-primary" href="/api/oauth/google/start">
+            {config?.integrations.google ? (
+              <a
+                className="settings-primary"
+                href={
+                  config.integrations.composio
+                    ? "/api/composio/connect/google"
+                    : "/api/oauth/google/start"
+                }
+              >
                 Connect
               </a>
             ) : (
-              <span className="settings-unconfigured">OAuth keys needed</span>
+              <span className="settings-unconfigured">Connection unavailable</span>
             )}
           </section>
 
@@ -414,12 +480,19 @@ export function SettingsPanel() {
               <h2>Microsoft</h2>
               <p>Outlook, Microsoft 365, work, and school.</p>
             </div>
-            {config?.providers.microsoft ? (
-              <a className="settings-primary" href="/api/oauth/microsoft/start">
+            {config?.integrations.microsoft ? (
+              <a
+                className="settings-primary"
+                href={
+                  config.integrations.composio
+                    ? "/api/composio/connect/microsoft"
+                    : "/api/oauth/microsoft/start"
+                }
+              >
                 Connect
               </a>
             ) : (
-              <span className="settings-unconfigured">OAuth keys needed</span>
+              <span className="settings-unconfigured">Connection unavailable</span>
             )}
           </section>
         </div>
@@ -447,12 +520,30 @@ export function SettingsPanel() {
                         ? `Synced ${new Date(account.lastSyncAt).toLocaleString()}`
                         : "Waiting for first sync"}
                     </small>
+                    <small className="account-capability">
+                      {account.authBackend === "composio"
+                        ? "Managed securely by Composio"
+                        : "Direct provider connection"}
+                    </small>
+                    {account.authBackend === "direct" &&
+                    config?.integrations.composio ? (
+                      <a
+                        className="settings-reconnect"
+                        href={`/api/composio/connect/${account.provider}`}
+                      >
+                        Move this mailbox to Composio
+                      </a>
+                    ) : null}
                     {account.capabilities.calendar ? (
                       <small className="account-capability">Mail + Calendar</small>
                     ) : (
                       <a
                         className="settings-reconnect"
-                        href={`/api/oauth/${account.provider}/start`}
+                        href={
+                          config?.integrations.composio
+                            ? `/api/composio/connect/${account.provider}`
+                            : `/api/oauth/${account.provider}/start`
+                        }
                       >
                         Reconnect to enable Calendar
                       </a>
@@ -494,7 +585,7 @@ export function SettingsPanel() {
         <footer className="settings-privacy">
           <Cloud size={16} />
           <span>
-            Self-hosted data plane · private user workspaces · encrypted provider tokens and content
+            Private Rubidium workspaces · provider credentials managed by Composio · encrypted local content
           </span>
         </footer>
       </section>

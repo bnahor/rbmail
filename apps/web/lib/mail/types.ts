@@ -1,5 +1,7 @@
 export type Provider = "google" | "microsoft";
 
+export type AuthBackend = "direct" | "composio";
+
 export type MailAddress = {
   name: string;
   address: string;
@@ -38,6 +40,8 @@ export type StoredAccount = {
   providerAccountId: string;
   email: string;
   displayName: string;
+  authBackend: AuthBackend;
+  connectedAccountId: string | null;
   token: StoredToken;
   syncCursor: string | null;
   status: "connected" | "syncing" | "error" | "reauth_required";
@@ -51,7 +55,7 @@ export type AccountCapabilities = {
 
 export type PublicAccount = Omit<
   StoredAccount,
-  "token" | "syncCursor" | "userId"
+  "token" | "syncCursor" | "userId" | "connectedAccountId"
 > & {
   capabilities: AccountCapabilities;
 };
