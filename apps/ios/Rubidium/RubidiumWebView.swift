@@ -45,7 +45,7 @@ private struct RubidiumConfigurationEnvelope: Decodable {
     let providers: Providers
 }
 
-private struct RubidiumEmptyResponse: Decodable {}
+struct RubidiumEmptyResponse: Decodable {}
 
 @MainActor
 final class RubidiumBrowserModel: ObservableObject {
@@ -200,6 +200,7 @@ final class RubidiumBrowserModel: ObservableObject {
             // server session will be checked again on the next launch.
         }
         sessionState = .signedOut
+        RubidiumLocalCache.shared.clear()
         webView?.load(URLRequest(url: appURL.appendingPathComponent("settings")))
     }
 
@@ -237,7 +238,8 @@ final class RubidiumBrowserModel: ObservableObject {
     func api<T: Decodable>(
         _ path: String,
         method: String = "GET",
-        body: [String: Any]? = nil
+        body: [String: Any]? = nil,
+        headers: [String: String] = [:]
     ) async throws -> T {
         guard let webView else {
             throw RubidiumAPIError(status: 0, message: "Rubidium is still starting.", code: nil)
@@ -261,7 +263,10 @@ final class RubidiumBrowserModel: ObservableObject {
           const response = await fetch(path, {
             method,
             credentials: 'include',
-            headers: hasBody ? {'content-type': 'application/json'} : undefined,
+            headers: {
+              ...headers,
+              ...(hasBody ? {'content-type': 'application/json'} : {})
+            },
             body: hasBody ? bodyText : undefined
           });
           const text = await response.text();
@@ -282,6 +287,7 @@ final class RubidiumBrowserModel: ObservableObject {
                 "method": method,
                 "hasBody": hasBody,
                 "bodyText": bodyText,
+                "headers": headers,
             ],
             in: nil,
             contentWorld: .page
@@ -523,10 +529,15 @@ struct RubidiumWebView: UIViewRepresentable {
 
         func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
             if let window = model.webView?.window { return window }
-            return UIApplication.shared.connectedScenes
+            let scenes = UIApplication.shared.connectedScenes
                 .compactMap { $0 as? UIWindowScene }
-                .flatMap(\.windows)
-                .first { $0.isKeyWindow } ?? ASPresentationAnchor()
+            if let keyWindow = scenes.flatMap(\.windows).first(where: \.isKeyWindow) {
+                return keyWindow
+            }
+            guard let scene = scenes.first else {
+                preconditionFailure("Rubidium authentication requires an active window scene")
+            }
+            return ASPresentationAnchor(windowScene: scene)
         }
 
         fileprivate func beginAuthentication(action: String, provider: String, token: String?) {

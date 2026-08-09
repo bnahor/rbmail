@@ -8,6 +8,10 @@ enum RubidiumIntelligenceAction: String, CaseIterable, Identifiable {
     case summarize
     case nextSteps
     case draftReply
+    case shorten
+    case elaborate
+    case changeTone
+    case proofread
 
     var id: String { rawValue }
 
@@ -16,6 +20,10 @@ enum RubidiumIntelligenceAction: String, CaseIterable, Identifiable {
         case .summarize: "Summarize"
         case .nextSteps: "Find next steps"
         case .draftReply: "Draft a reply"
+        case .shorten: "Shorten"
+        case .elaborate: "Elaborate"
+        case .changeTone: "Change tone"
+        case .proofread: "Proofread"
         }
     }
 
@@ -24,6 +32,10 @@ enum RubidiumIntelligenceAction: String, CaseIterable, Identifiable {
         case .summarize: "Compress the visible conversation"
         case .nextSteps: "Extract decisions, dates, and owners"
         case .draftReply: "Write a concise response in your voice"
+        case .shorten: "Make the draft tighter without losing facts"
+        case .elaborate: "Add useful context without inventing details"
+        case .changeTone: "Make the draft warm, direct, and professional"
+        case .proofread: "Correct grammar while preserving your meaning"
         }
     }
 
@@ -32,6 +44,10 @@ enum RubidiumIntelligenceAction: String, CaseIterable, Identifiable {
         case .summarize: "text.alignleft"
         case .nextSteps: "checklist"
         case .draftReply: "arrowshape.turn.up.left"
+        case .shorten: "arrow.down.right.and.arrow.up.left"
+        case .elaborate: "arrow.up.left.and.arrow.down.right"
+        case .changeTone: "slider.horizontal.3"
+        case .proofread: "checkmark.seal"
         }
     }
 
@@ -43,6 +59,14 @@ enum RubidiumIntelligenceAction: String, CaseIterable, Identifiable {
             "Extract the next actions from the visible email context. Group them by owner, include dates when present, and do not invent tasks."
         case .draftReply:
             "Draft a concise, natural reply to the visible email. Be direct and warm. Do not promise anything absent from the context. Return only the draft."
+        case .shorten:
+            "Shorten the user draft while preserving every factual name, date, request, and commitment. Return only the revised draft."
+        case .elaborate:
+            "Elaborate the user draft where clarity benefits, but do not invent facts or commitments. Return only the revised draft."
+        case .changeTone:
+            "Rewrite the user draft to be warm, direct, and professional without changing its meaning. Return only the revised draft."
+        case .proofread:
+            "Proofread the user draft for grammar and clarity without changing factual meaning. Return only the revised draft."
         }
     }
 }

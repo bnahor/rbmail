@@ -5,6 +5,7 @@ import {
 } from "@/lib/server/calendar";
 import { syncAccount, syncAllAccounts } from "@/lib/server/sync";
 import { getAccount } from "@/lib/server/db";
+import { processOutboundQueue } from "@/lib/server/outbox";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -43,9 +44,10 @@ export async function GET(request: Request) {
   if (!configured || authorization !== `Bearer ${configured}`) {
     return unauthorized();
   }
-  const [results, calendarResults] = await Promise.all([
+  const [results, calendarResults, outboundResults] = await Promise.all([
     syncAllAccounts(1),
     syncAllCalendars(),
+    processOutboundQueue(),
   ]);
-  return Response.json({ results, calendarResults });
+  return Response.json({ results, calendarResults, outboundResults });
 }

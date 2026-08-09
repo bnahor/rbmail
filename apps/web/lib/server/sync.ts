@@ -2,6 +2,7 @@ import type { SyncResult } from "@/lib/mail/types";
 import { getAccount, getAccounts } from "@/lib/server/db";
 import { syncGoogleAccount } from "@/lib/server/google";
 import { syncMicrosoftAccount } from "@/lib/server/microsoft";
+import { ensureProviderSubscription } from "@/lib/server/provider-subscriptions";
 
 export async function syncAccount(
   accountId: string,
@@ -20,6 +21,8 @@ export async function syncAccount(
     results.push(result);
     if (!result.hasMore) break;
   }
+  const refreshed = getAccount(accountId);
+  if (refreshed) await ensureProviderSubscription(refreshed).catch(() => null);
   return results;
 }
 

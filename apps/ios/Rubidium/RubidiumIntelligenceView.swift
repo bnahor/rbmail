@@ -3,8 +3,10 @@ import UIKit
 
 struct RubidiumIntelligenceView: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var browser: RubidiumBrowserModel
     @ObservedObject var intelligence: RubidiumIntelligenceModel
+    let context: String
+    var insertResult: ((String) -> Void)? = nil
+    var replaceResult: ((String) -> Void)? = nil
     @Namespace private var intelligenceGlassNamespace
 
     var body: some View {
@@ -77,7 +79,7 @@ struct RubidiumIntelligenceView: View {
                 Label("On-device and private", systemImage: "checkmark.shield.fill")
                     .font(.headline)
                     .foregroundStyle(Color(red: 0.94, green: 0.16, blue: 0.2))
-                Text("Only the text visible in the current Rubidium view is passed to Apple’s on-device model. Nothing is sent automatically.")
+                Text("Only the native conversation or draft you selected is passed to Apple’s on-device model. Nothing is sent automatically.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -150,7 +152,6 @@ struct RubidiumIntelligenceView: View {
         Button {
             RubidiumHaptics.shared.play(.action)
             Task {
-                let context = await browser.visibleMailContext()
                 await intelligence.perform(action, context: context)
             }
         } label: {
@@ -207,17 +208,24 @@ struct RubidiumIntelligenceView: View {
                 .font(.body)
                 .textSelection(.enabled)
 
-            if intelligence.selectedAction == .draftReply {
-                Button {
-                    browser.insertReplyDraft(intelligence.result)
-                    RubidiumHaptics.shared.play(.success)
-                    dismiss()
-                } label: {
-                    Label("Use in reply", systemImage: "arrow.down.to.line.compact")
-                        .frame(maxWidth: .infinity)
+            if (insertResult != nil || replaceResult != nil) && intelligence.selectedAction != .summarize && intelligence.selectedAction != .nextSteps {
+                HStack {
+                    if insertResult != nil {
+                        Button("Insert", systemImage: "arrow.down.to.line.compact") {
+                            insertResult?(intelligence.result)
+                            RubidiumHaptics.shared.play(.success)
+                            dismiss()
+                        }
+                    }
+                    if replaceResult != nil {
+                        Button("Replace Draft", systemImage: "arrow.triangle.2.circlepath") {
+                            replaceResult?(intelligence.result)
+                            RubidiumHaptics.shared.play(.success)
+                            dismiss()
+                        }
+                    }
                 }
                 .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.roundedRectangle(radius: 14))
                 .controlSize(.large)
             }
         }

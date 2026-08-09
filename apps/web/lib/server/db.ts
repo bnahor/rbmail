@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,7 +13,12 @@ import type {
   CalendarEventDetail,
   CalendarEventSummary,
   CalendarSource,
+  ComposeMessageInput,
+  Draft,
   MailAddress,
+  MailAttachment,
+  MailAction,
+  NotificationPreferences,
   NormalizedMessage,
   Provider,
   PublicAccount,
@@ -24,6 +29,7 @@ import type {
   ThreadSummary,
 } from "@/lib/mail/types";
 import { decryptJson, decryptString, encryptJson, encryptString } from "./crypto";
+import { applyCompatibilityMigrations } from "./db-migrations";
 
 type DatabaseHolder = {
   rbmailDatabase?: DatabaseSync;
@@ -42,11 +48,16 @@ function databasePath() {
   return path.join(directory, "rbmail.sqlite");
 }
 
-function initialize(database: DatabaseSync) {
+export function initializeDatabase(database: DatabaseSync) {
   database.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
     PRAGMA busy_timeout = 5000;
+  `);
+
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database.exec(`
 
     CREATE TABLE IF NOT EXISTS mail_accounts (
       id TEXT PRIMARY KEY,
@@ -77,6 +88,12 @@ function initialize(database: DatabaseSync) {
       last_message_at TEXT NOT NULL,
       unread INTEGER NOT NULL DEFAULT 0,
       archived INTEGER NOT NULL DEFAULT 0,
+      flagged INTEGER NOT NULL DEFAULT 0,
+      snoozed_until TEXT,
+      muted INTEGER NOT NULL DEFAULT 0,
+      vip INTEGER NOT NULL DEFAULT 0,
+      mailbox_kind TEXT NOT NULL DEFAULT 'inbox',
+      sync_version INTEGER NOT NULL DEFAULT 1,
       updated_at INTEGER NOT NULL,
       UNIQUE(account_id, provider_thread_id)
     );
@@ -92,6 +109,89 @@ function initialize(database: DatabaseSync) {
       has_attachments INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL,
       UNIQUE(account_id, provider_message_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS mail_attachments (
+      id TEXT PRIMARY KEY,
+      message_id TEXT NOT NULL REFERENCES mail_messages(id) ON DELETE CASCADE,
+      account_id TEXT NOT NULL REFERENCES mail_accounts(id) ON DELETE CASCADE,
+      provider_attachment_id TEXT NOT NULL,
+      metadata_cipher TEXT NOT NULL,
+      content_id TEXT,
+      inline INTEGER NOT NULL DEFAULT 0,
+      byte_size INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(message_id, provider_attachment_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS mail_drafts (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      account_id TEXT NOT NULL REFERENCES mail_accounts(id) ON DELETE CASCADE,
+      payload_cipher TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'draft',
+      error_cipher TEXT,
+      send_at INTEGER,
+      idempotency_key TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(idempotency_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS mail_mutations (
+      idempotency_key TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      response_cipher TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mail_rules (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      payload_cipher TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS native_devices (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      token_cipher TEXT NOT NULL,
+      environment TEXT NOT NULL,
+      locale TEXT NOT NULL DEFAULT 'en',
+      active INTEGER NOT NULL DEFAULT 1,
+      last_seen_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS notification_preferences (
+      user_id TEXT PRIMARY KEY,
+      payload_cipher TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS provider_subscriptions (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL REFERENCES mail_accounts(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      resource TEXT NOT NULL,
+      details_cipher TEXT NOT NULL,
+      expires_at INTEGER,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(account_id, resource)
+    );
+
+    CREATE TABLE IF NOT EXISTS notification_deliveries (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      provider_message_id TEXT NOT NULL,
+      delivered_at INTEGER NOT NULL,
+      UNIQUE(user_id, account_id, provider_message_id)
     );
 
     CREATE TABLE IF NOT EXISTS oauth_states (
@@ -153,44 +253,28 @@ function initialize(database: DatabaseSync) {
       ON mail_threads(last_message_at DESC);
     CREATE INDEX IF NOT EXISTS idx_messages_thread
       ON mail_messages(thread_id, received_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_attachments_message
+      ON mail_attachments(message_id);
+    CREATE INDEX IF NOT EXISTS idx_drafts_user
+      ON mail_drafts(user_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_calendar_events_range
       ON calendar_events(start_at, end_at);
     CREATE INDEX IF NOT EXISTS idx_calendar_events_source
       ON calendar_events(source_id, start_at);
-  `);
-  try {
-    database.exec(
-      "ALTER TABLE mail_threads ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
-    );
-  } catch {
-    // The column already exists.
+    `);
+
+    applyCompatibilityMigrations(database);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
   }
-  for (const statement of [
-    "ALTER TABLE mail_accounts ADD COLUMN user_id TEXT",
-    "ALTER TABLE mail_accounts ADD COLUMN auth_backend TEXT NOT NULL DEFAULT 'direct'",
-    "ALTER TABLE mail_accounts ADD COLUMN connected_account_id TEXT",
-    "ALTER TABLE oauth_states ADD COLUMN user_id TEXT",
-    "ALTER TABLE oauth_states ADD COLUMN native INTEGER NOT NULL DEFAULT 0",
-  ]) {
-    try {
-      database.exec(statement);
-    } catch {
-      // The column already exists.
-    }
-  }
-  database.exec(`
-    CREATE INDEX IF NOT EXISTS idx_mail_accounts_user
-      ON mail_accounts(user_id, created_at);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_accounts_composio_connection
-      ON mail_accounts(connected_account_id)
-      WHERE connected_account_id IS NOT NULL;
-  `);
 }
 
 export function getDatabase(): DatabaseSync {
   if (!globalDatabase.rbmailDatabase) {
     const database = new DatabaseSync(databasePath());
-    initialize(database);
+    initializeDatabase(database);
     globalDatabase.rbmailDatabase = database;
   }
   return globalDatabase.rbmailDatabase;
@@ -890,13 +974,22 @@ export function upsertMessage(account: StoredAccount, message: NormalizedMessage
       all.findIndex((candidate) => candidate.address === address.address) === index,
   );
   const now = Date.now();
+  const mailboxKind = (() => {
+    if (message.labels.includes("TRASH") || message.folder === "deleteditems") return "trash";
+    if (message.labels.includes("SPAM") || message.folder === "junkemail") return "junk";
+    if (message.labels.includes("DRAFT") || message.folder === "drafts") return "drafts";
+    if (message.labels.includes("SENT") || message.folder === "sentitems") return "sent";
+    if (message.labels.includes("INBOX") || message.folder === "inbox") return "inbox";
+    return "archive";
+  })();
 
   database
     .prepare(
       `INSERT INTO mail_threads (
         id, account_id, provider_thread_id, subject_cipher, snippet_cipher,
-        participants_cipher, labels_cipher, last_message_at, unread, archived, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        participants_cipher, labels_cipher, last_message_at, unread, archived,
+        flagged, mailbox_kind, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(account_id, provider_thread_id) DO UPDATE SET
         subject_cipher = CASE
           WHEN excluded.last_message_at >= mail_threads.last_message_at
@@ -908,8 +1001,13 @@ export function upsertMessage(account: StoredAccount, message: NormalizedMessage
         labels_cipher = excluded.labels_cipher,
         last_message_at = MAX(mail_threads.last_message_at, excluded.last_message_at),
         unread = MAX(mail_threads.unread, excluded.unread),
+        flagged = MAX(mail_threads.flagged, excluded.flagged),
         archived = CASE
           WHEN excluded.archived = 0 THEN 0 ELSE mail_threads.archived END,
+        mailbox_kind = CASE
+          WHEN excluded.last_message_at >= mail_threads.last_message_at
+          THEN excluded.mailbox_kind ELSE mail_threads.mailbox_kind END,
+        sync_version = mail_threads.sync_version + 1,
         updated_at = excluded.updated_at`,
     )
     .run(
@@ -923,9 +1021,14 @@ export function upsertMessage(account: StoredAccount, message: NormalizedMessage
       message.receivedAt,
       message.isRead ? 0 : 1,
       message.labels.includes("INBOX") || message.folder === "inbox" ? 0 : 1,
+      message.flagged ? 1 : 0,
+      mailboxKind,
       now,
     );
 
+  // Persist the parent before its attachment rows. SQLite foreign keys are
+  // enabled, so reversing this order makes the first sync of an attached
+  // message fail even though subsequent updates appear healthy.
   database
     .prepare(
       `INSERT INTO mail_messages (
@@ -951,6 +1054,28 @@ export function upsertMessage(account: StoredAccount, message: NormalizedMessage
       message.hasAttachments ? 1 : 0,
       now,
     );
+
+  database.prepare("DELETE FROM mail_attachments WHERE message_id = ?").run(messageId);
+  const attachmentStatement = database.prepare(
+    `INSERT INTO mail_attachments (
+      id, message_id, account_id, provider_attachment_id, metadata_cipher,
+      content_id, inline, byte_size, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const attachment of message.attachments ?? []) {
+    attachmentStatement.run(
+      `${messageId}:${attachment.id}`,
+      messageId,
+      account.id,
+      attachment.providerAttachmentId,
+      encryptJson(attachment),
+      attachment.contentId,
+      attachment.inline ? 1 : 0,
+      attachment.size,
+      now,
+      now,
+    );
+  }
 
   const unread = database
     .prepare(
@@ -986,7 +1111,9 @@ export function deleteProviderMessage(accountId: string, providerMessageId: stri
 export function markThreadRead(id: string, read: boolean) {
   const database = getDatabase();
   database
-    .prepare("UPDATE mail_threads SET unread = ?, updated_at = ? WHERE id = ?")
+    .prepare(
+      "UPDATE mail_threads SET unread = ?, sync_version = sync_version + 1, updated_at = ? WHERE id = ?",
+    )
     .run(read ? 0 : 1, Date.now(), id);
   database
     .prepare("UPDATE mail_messages SET is_read = ?, updated_at = ? WHERE thread_id = ?")
@@ -995,8 +1122,336 @@ export function markThreadRead(id: string, read: boolean) {
 
 export function setThreadArchived(id: string, archived: boolean) {
   getDatabase()
-    .prepare("UPDATE mail_threads SET archived = ?, updated_at = ? WHERE id = ?")
-    .run(archived ? 1 : 0, Date.now(), id);
+    .prepare(
+      "UPDATE mail_threads SET archived = ?, mailbox_kind = ?, sync_version = sync_version + 1, updated_at = ? WHERE id = ?",
+    )
+    .run(archived ? 1 : 0, archived ? "archive" : "inbox", Date.now(), id);
+}
+
+export function setThreadState(
+  id: string,
+  action: MailAction,
+  options: { snoozedUntil?: string | null } = {},
+) {
+  const database = getDatabase();
+  const values: Record<string, string | number | null> = {};
+  if (action === "flag" || action === "unflag") values.flagged = action === "flag" ? 1 : 0;
+  if (action === "mute" || action === "unmute") values.muted = action === "mute" ? 1 : 0;
+  if (action === "vip" || action === "unvip") values.vip = action === "vip" ? 1 : 0;
+  if (action === "snooze") values.snoozed_until = options.snoozedUntil ?? null;
+  if (action === "unsnooze") values.snoozed_until = null;
+  if (action === "trash" || action === "archive" || action === "junk") values.archived = 1;
+  if (action === "restore" || action === "not_junk") values.archived = 0;
+  if (action === "trash") values.mailbox_kind = "trash";
+  if (action === "archive") values.mailbox_kind = "archive";
+  if (action === "junk") values.mailbox_kind = "junk";
+  if (action === "restore" || action === "not_junk") values.mailbox_kind = "inbox";
+  if (action === "read" || action === "unread") {
+    markThreadRead(id, action === "read");
+  }
+  const entries = Object.entries(values);
+  if (!entries.length) return;
+  database
+    .prepare(
+      `UPDATE mail_threads SET ${entries.map(([key]) => `${key} = ?`).join(", ")},
+       sync_version = sync_version + 1, updated_at = ? WHERE id = ?`,
+    )
+    .run(...entries.map(([, value]) => value), Date.now(), id);
+}
+
+export function getMessage(
+  id: string,
+  userId?: string,
+): (NormalizedMessage & { accountId: string; threadId: string }) | null {
+  const row = getDatabase()
+    .prepare(
+      `SELECT m.payload_cipher, m.account_id, m.thread_id
+       FROM mail_messages m
+       JOIN mail_accounts a ON a.id = m.account_id
+       WHERE m.id = ? AND (? IS NULL OR a.user_id = ?)`,
+    )
+    .get(id, userId ?? null, userId ?? null) as
+    | { payload_cipher: string; account_id: string; thread_id: string }
+    | undefined;
+  if (!row) return null;
+  return {
+    ...hydrateNormalizedMessage(decryptJson<NormalizedMessage>(row.payload_cipher)),
+    accountId: row.account_id,
+    threadId: row.thread_id,
+  };
+}
+
+export function getAttachment(
+  messageId: string,
+  attachmentId: string,
+  userId: string,
+): { attachment: MailAttachment; message: ReturnType<typeof getMessage> } | null {
+  const message = getMessage(messageId, userId);
+  if (!message) return null;
+  const attachment = message.attachments?.find(
+    (candidate) =>
+      candidate.id === attachmentId ||
+      candidate.providerAttachmentId === attachmentId ||
+      candidate.contentId === attachmentId,
+  );
+  return attachment ? { attachment, message } : null;
+}
+
+export function getMailMutation<T>(userId: string, key: string): T | null {
+  const row = getDatabase()
+    .prepare(
+      "SELECT response_cipher FROM mail_mutations WHERE idempotency_key = ? AND user_id = ?",
+    )
+    .get(key, userId) as { response_cipher: string } | undefined;
+  return row ? decryptJson<T>(row.response_cipher) : null;
+}
+
+export function saveMailMutation(userId: string, key: string, response: unknown) {
+  const database = getDatabase();
+  database
+    .prepare("DELETE FROM mail_mutations WHERE created_at < ?")
+    .run(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  database
+    .prepare(
+      `INSERT INTO mail_mutations (idempotency_key, user_id, response_cipher, created_at)
+       VALUES (?, ?, ?, ?) ON CONFLICT(idempotency_key) DO NOTHING`,
+    )
+    .run(key, userId, encryptJson(response), Date.now());
+}
+
+function draftRow(row: Record<string, unknown>): Draft {
+  const payload = decryptJson<ComposeMessageInput>(String(row.payload_cipher));
+  return {
+    ...payload,
+    id: String(row.id),
+    userId: String(row.user_id),
+    state: String(row.state) as Draft["state"],
+    error: row.error_cipher ? decryptString(String(row.error_cipher)) : null,
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  };
+}
+
+export function saveDraft(
+  userId: string,
+  input: ComposeMessageInput,
+  options: { id?: string; state?: Draft["state"]; error?: string | null; idempotencyKey?: string } = {},
+): Draft {
+  const id = options.id || randomUUID();
+  const now = Date.now();
+  getDatabase()
+    .prepare(
+      `INSERT INTO mail_drafts (
+        id, user_id, account_id, payload_cipher, state, error_cipher,
+        send_at, idempotency_key, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+        account_id = excluded.account_id,
+        payload_cipher = excluded.payload_cipher,
+        state = excluded.state,
+        error_cipher = excluded.error_cipher,
+        send_at = excluded.send_at,
+        idempotency_key = COALESCE(excluded.idempotency_key, mail_drafts.idempotency_key),
+        updated_at = excluded.updated_at`,
+    )
+    .run(
+      id,
+      userId,
+      input.accountId,
+      encryptJson(input),
+      options.state || "draft",
+      options.error ? encryptString(options.error) : null,
+      input.sendAt ? new Date(input.sendAt).getTime() : null,
+      options.idempotencyKey || null,
+      now,
+      now,
+    );
+  return getDraft(userId, id)!;
+}
+
+export function getDraft(userId: string, id: string): Draft | null {
+  const row = getDatabase()
+    .prepare("SELECT * FROM mail_drafts WHERE id = ? AND user_id = ?")
+    .get(id, userId) as Record<string, unknown> | undefined;
+  return row ? draftRow(row) : null;
+}
+
+export function listDrafts(userId: string): Draft[] {
+  return (getDatabase()
+    .prepare("SELECT * FROM mail_drafts WHERE user_id = ? ORDER BY updated_at DESC")
+    .all(userId) as Record<string, unknown>[]).map(draftRow);
+}
+
+export function deleteDraft(userId: string, id: string) {
+  return getDatabase()
+    .prepare("DELETE FROM mail_drafts WHERE id = ? AND user_id = ?")
+    .run(id, userId).changes > 0;
+}
+
+export function listDueDrafts(now = Date.now()): Draft[] {
+  return (getDatabase()
+    .prepare(
+      "SELECT * FROM mail_drafts WHERE state = 'queued' AND send_at IS NOT NULL AND send_at <= ? ORDER BY send_at ASC LIMIT 50",
+    )
+    .all(now) as Record<string, unknown>[]).map(draftRow);
+}
+
+const defaultNotificationPreferences: NotificationPreferences = {
+  enabled: true,
+  scope: "all",
+  accountIds: [],
+  showSender: true,
+  showSubject: true,
+  showBody: false,
+  sound: true,
+  badge: true,
+  calendarReminders: false,
+};
+
+export function getNotificationPreferences(userId: string): NotificationPreferences {
+  const row = getDatabase()
+    .prepare("SELECT payload_cipher FROM notification_preferences WHERE user_id = ?")
+    .get(userId) as { payload_cipher: string } | undefined;
+  return row
+    ? { ...defaultNotificationPreferences, ...decryptJson<NotificationPreferences>(row.payload_cipher) }
+    : { ...defaultNotificationPreferences };
+}
+
+export function saveNotificationPreferences(
+  userId: string,
+  preferences: NotificationPreferences,
+) {
+  getDatabase()
+    .prepare(
+      `INSERT INTO notification_preferences (user_id, payload_cipher, updated_at)
+       VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET
+       payload_cipher = excluded.payload_cipher, updated_at = excluded.updated_at`,
+    )
+    .run(userId, encryptJson(preferences), Date.now());
+  return preferences;
+}
+
+export function registerNativeDevice(input: {
+  userId: string;
+  token: string;
+  environment: "sandbox" | "production";
+  locale?: string;
+}) {
+  const hash = createHash("sha256").update(input.token).digest("hex");
+  const now = Date.now();
+  const id = randomUUID();
+  getDatabase()
+    .prepare(
+      `INSERT INTO native_devices (
+        id, user_id, token_hash, token_cipher, environment, locale,
+        active, last_seen_at, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+       ON CONFLICT(token_hash) DO UPDATE SET
+        user_id = excluded.user_id, token_cipher = excluded.token_cipher,
+        environment = excluded.environment, locale = excluded.locale,
+        active = 1, last_seen_at = excluded.last_seen_at,
+        updated_at = excluded.updated_at`,
+    )
+    .run(
+      id, input.userId, hash, encryptString(input.token), input.environment,
+      input.locale || "en", now, now, now,
+    );
+  return { id, tokenHash: hash };
+}
+
+export function listNativeDevices(userId: string) {
+  return (getDatabase()
+    .prepare("SELECT * FROM native_devices WHERE user_id = ? AND active = 1")
+    .all(userId) as Record<string, unknown>[]).map((row) => ({
+      id: String(row.id),
+      token: decryptString(String(row.token_cipher)),
+      environment: String(row.environment) as "sandbox" | "production",
+    }));
+}
+
+export function unreadCount(userId: string): number {
+  const row = getDatabase()
+    .prepare(
+      `SELECT COUNT(*) AS count FROM mail_threads t
+       JOIN mail_accounts a ON a.id = t.account_id
+       WHERE a.user_id = ? AND t.unread = 1 AND t.archived = 0
+       AND (t.snoozed_until IS NULL OR t.snoozed_until <= ?)`,
+    )
+    .get(userId, new Date().toISOString()) as { count: number };
+  return Number(row.count || 0);
+}
+
+export function claimNotificationDelivery(input: {
+  userId: string;
+  accountId: string;
+  providerMessageId: string;
+}): boolean {
+  try {
+    getDatabase()
+      .prepare(
+        `INSERT INTO notification_deliveries (
+          id, user_id, account_id, provider_message_id, delivered_at
+         ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        randomUUID(), input.userId, input.accountId, input.providerMessageId, Date.now(),
+      );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function upsertProviderSubscription(input: {
+  id: string;
+  accountId: string;
+  provider: Provider;
+  resource: string;
+  details: Record<string, unknown>;
+  expiresAt?: number | null;
+}) {
+  getDatabase()
+    .prepare(
+      `INSERT INTO provider_subscriptions (
+        id, account_id, provider, resource, details_cipher, expires_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(account_id, resource) DO UPDATE SET
+        id = excluded.id,
+        details_cipher = excluded.details_cipher,
+        expires_at = excluded.expires_at,
+        updated_at = excluded.updated_at`,
+    )
+    .run(
+      input.id,
+      input.accountId,
+      input.provider,
+      input.resource,
+      encryptJson(input.details),
+      input.expiresAt ?? null,
+      Date.now(),
+    );
+}
+
+export function getProviderSubscription(id: string) {
+  const row = getDatabase()
+    .prepare("SELECT * FROM provider_subscriptions WHERE id = ?")
+    .get(id) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    id: String(row.id),
+    accountId: String(row.account_id),
+    provider: String(row.provider) as Provider,
+    resource: String(row.resource),
+    details: decryptJson<Record<string, unknown>>(String(row.details_cipher)),
+    expiresAt: row.expires_at ? Number(row.expires_at) : null,
+  };
+}
+
+export function getAccountSubscription(accountId: string, resource: string) {
+  const row = getDatabase()
+    .prepare("SELECT id FROM provider_subscriptions WHERE account_id = ? AND resource = ?")
+    .get(accountId, resource) as { id: string } | undefined;
+  return row ? getProviderSubscription(row.id) : null;
 }
 
 function threadRowToSummary(row: Record<string, unknown>): ThreadSummary {
@@ -1013,30 +1468,119 @@ function threadRowToSummary(row: Record<string, unknown>): ThreadSummary {
     labels: decryptJson<string[]>(String(row.labels_cipher)),
     lastMessageAt: String(row.last_message_at),
     unread: Number(row.unread) === 1,
+    flagged: Number(row.flagged) === 1,
+    archived: Number(row.archived) === 1,
+    snoozedUntil: row.snoozed_until ? String(row.snoozed_until) : null,
+    muted: Number(row.muted) === 1,
+    vip: Number(row.vip) === 1,
+    syncVersion: Number(row.sync_version || 1),
+    attachmentCount: Number(row.attachment_count || 0),
     messageCount: Number(row.message_count),
   };
 }
 
-export function listThreads(userId: string, limit = 100): ThreadSummary[] {
+function hydrateNormalizedMessage(message: NormalizedMessage): NormalizedMessage {
+  return {
+    ...message,
+    bcc: message.bcc ?? [],
+    flagged: message.flagged ?? message.labels?.includes("STARRED") ?? false,
+    attachments: message.attachments ?? [],
+    headers: message.headers ?? {
+      messageId: null,
+      inReplyTo: null,
+      references: [],
+      replyTo: [],
+      listUnsubscribe: null,
+    },
+    mimeTree: message.mimeTree ?? null,
+  };
+}
+
+export type ThreadListOptions = {
+  limit?: number;
+  cursor?: string;
+  accountId?: string;
+  view?: string;
+  query?: string;
+};
+
+export function listThreads(
+  userId: string,
+  limitOrOptions: number | ThreadListOptions = 100,
+): ThreadSummary[] {
+  const options: ThreadListOptions =
+    typeof limitOrOptions === "number" ? { limit: limitOrOptions } : limitOrOptions;
+  const limit = Math.max(1, Math.min(options.limit ?? 100, 500));
+  const cursor = options.cursor
+    ? Buffer.from(options.cursor, "base64url").toString("utf8").split("\u0000")
+    : [];
+  const clauses = ["a.user_id = ?"];
+  const values: Array<string | number | null> = [userId];
+  const now = new Date().toISOString();
+  switch (options.view) {
+    case "archive": clauses.push("t.mailbox_kind = 'archive'"); break;
+    case "sent": clauses.push("t.mailbox_kind = 'sent'"); break;
+    case "drafts": clauses.push("t.mailbox_kind = 'drafts'"); break;
+    case "junk": clauses.push("t.mailbox_kind = 'junk'"); break;
+    case "flagged": clauses.push("t.flagged = 1"); break;
+    case "vip": clauses.push("t.vip = 1"); break;
+    case "snoozed": clauses.push("t.snoozed_until IS NOT NULL"); break;
+    case "trash": clauses.push("t.mailbox_kind = 'trash'"); break;
+    default:
+      // Search spans the encrypted local history rather than silently being
+      // constrained to the current inbox. Normal mailbox loads retain the
+      // inbox/snooze contract.
+      if (!options.query?.trim()) {
+        clauses.push("t.mailbox_kind = 'inbox'");
+        clauses.push("t.archived = 0");
+        clauses.push("(t.snoozed_until IS NULL OR t.snoozed_until <= ?)");
+        values.push(now);
+      }
+  }
+  if (options.accountId) {
+    clauses.push("t.account_id = ?");
+    values.push(options.accountId);
+  }
+  if (cursor.length === 2) {
+    clauses.push("(t.last_message_at < ? OR (t.last_message_at = ? AND t.id < ?))");
+    values.push(cursor[0], cursor[0], cursor[1]);
+  }
   const rows = getDatabase()
     .prepare(
       `SELECT t.*, a.provider, a.email, a.display_name,
-        (SELECT COUNT(*) FROM mail_messages m WHERE m.thread_id = t.id) AS message_count
+        (SELECT COUNT(*) FROM mail_messages m WHERE m.thread_id = t.id) AS message_count,
+        (SELECT COUNT(*) FROM mail_attachments ma
+          JOIN mail_messages mm ON mm.id = ma.message_id
+          WHERE mm.thread_id = t.id) AS attachment_count
        FROM mail_threads t
        JOIN mail_accounts a ON a.id = t.account_id
-       WHERE a.user_id = ? AND t.archived = 0
+       WHERE ${clauses.join(" AND ")}
        ORDER BY t.last_message_at DESC
        LIMIT ?`,
     )
-    .all(userId, Math.max(1, Math.min(limit, 500))) as Record<string, unknown>[];
-  return rows.map(threadRowToSummary);
+    .all(...values, options.query?.trim() ? 5_000 : limit * 3) as Record<string, unknown>[];
+  const normalizedQuery = options.query?.trim().toLowerCase();
+  const summaries = rows.map(threadRowToSummary);
+  return (normalizedQuery
+    ? summaries.filter((thread) =>
+        [thread.subject, thread.snippet, thread.email, thread.displayName,
+          ...thread.participants.flatMap((participant) => [participant.name, participant.address])]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedQuery),
+      )
+    : summaries
+  ).slice(0, limit);
 }
 
 export function getThread(id: string, userId?: string): ThreadDetail | null {
   const row = getDatabase()
     .prepare(
       `SELECT t.*, a.provider, a.email, a.display_name,
-        (SELECT COUNT(*) FROM mail_messages m WHERE m.thread_id = t.id) AS message_count
+        (SELECT COUNT(*) FROM mail_messages m WHERE m.thread_id = t.id) AS message_count,
+        (SELECT COUNT(*) FROM mail_attachments ma
+          JOIN mail_messages mm ON mm.id = ma.message_id
+          WHERE mm.thread_id = t.id) AS attachment_count
        FROM mail_threads t
        JOIN mail_accounts a ON a.id = t.account_id
        WHERE t.id = ? AND (? IS NULL OR a.user_id = ?)`,
@@ -1054,7 +1598,9 @@ export function getThread(id: string, userId?: string): ThreadDetail | null {
   return {
     ...threadRowToSummary(row),
     messages: messages.map((message) =>
-      decryptJson<NormalizedMessage>(message.payload_cipher),
+      hydrateNormalizedMessage(
+        decryptJson<NormalizedMessage>(message.payload_cipher),
+      ),
     ),
   };
 }

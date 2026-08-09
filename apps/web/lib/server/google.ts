@@ -1,4 +1,8 @@
 import type {
+  ComposeMessageInput,
+  MailAttachment,
+  Mailbox,
+  MIMEPart,
   NormalizedMessage,
   StoredAccount,
   SyncResult,
@@ -13,17 +17,22 @@ import { composioProxyFetch } from "@/lib/server/composio";
 import {
   cleanText,
   decodeBase64Url,
+  normalizeContentId,
   parseAddress,
   parseAddressList,
+  safeMailHeader,
+  sanitizeEmailHtml,
   stripHtml,
 } from "@/lib/server/mail-utils";
 import { refreshGoogleToken } from "@/lib/server/oauth";
+import { notifyNewMail } from "@/lib/server/apns";
 
 type GmailPart = {
+  partId?: string;
   mimeType?: string;
   filename?: string;
   headers?: Array<{ name: string; value: string }>;
-  body?: { data?: string; attachmentId?: string };
+  body?: { data?: string; attachmentId?: string; size?: number };
   parts?: GmailPart[];
 };
 
@@ -104,8 +113,46 @@ export async function changeGoogleMessage(
   );
 }
 
-function safeHeader(value: string) {
-  return value.replace(/[\r\n]+/g, " ").trim();
+export async function changeGoogleThread(
+  account: StoredAccount,
+  providerThreadId: string,
+  action:
+    | "read"
+    | "unread"
+    | "flag"
+    | "unflag"
+    | "archive"
+    | "junk"
+    | "not_junk",
+) {
+  const addLabelIds: string[] = [];
+  const removeLabelIds: string[] = [];
+  if (action === "read") removeLabelIds.push("UNREAD");
+  if (action === "unread") addLabelIds.push("UNREAD");
+  if (action === "flag") addLabelIds.push("STARRED");
+  if (action === "unflag") removeLabelIds.push("STARRED");
+  if (action === "archive") removeLabelIds.push("INBOX");
+  if (action === "junk") addLabelIds.push("SPAM");
+  if (action === "junk") removeLabelIds.push("INBOX");
+  if (action === "not_junk") removeLabelIds.push("SPAM");
+  if (action === "not_junk") addLabelIds.push("INBOX");
+  await gmailFetch(
+    account,
+    `/users/me/threads/${encodeURIComponent(providerThreadId)}/modify`,
+    { method: "POST", body: JSON.stringify({ addLabelIds, removeLabelIds }) },
+  );
+}
+
+export async function trashGoogleThread(
+  account: StoredAccount,
+  providerThreadId: string,
+  restore = false,
+) {
+  await gmailFetch(
+    account,
+    `/users/me/threads/${encodeURIComponent(providerThreadId)}/${restore ? "untrash" : "trash"}`,
+    { method: "POST", body: "{}" },
+  );
 }
 
 export async function replyWithGoogle(
@@ -121,9 +168,9 @@ export async function replyWithGoogle(
     ? input.subject
     : `Re: ${input.subject}`;
   const raw = [
-    `From: ${safeHeader(account.email)}`,
-    `To: ${safeHeader(input.to)}`,
-    `Subject: ${safeHeader(subject)}`,
+    `From: ${safeMailHeader(account.email)}`,
+    `To: ${safeMailHeader(input.to)}`,
+    `Subject: ${safeMailHeader(subject)}`,
     "MIME-Version: 1.0",
     'Content-Type: text/plain; charset="UTF-8"',
     "Content-Transfer-Encoding: 8bit",
@@ -144,9 +191,9 @@ export async function sendWithGoogle(
   input: { to: string; subject: string; body: string },
 ) {
   const raw = [
-    `From: ${safeHeader(account.email)}`,
-    `To: ${safeHeader(input.to)}`,
-    `Subject: ${safeHeader(input.subject)}`,
+    `From: ${safeMailHeader(account.email)}`,
+    `To: ${safeMailHeader(input.to)}`,
+    `Subject: ${safeMailHeader(input.subject)}`,
     "MIME-Version: 1.0",
     'Content-Type: text/plain; charset="UTF-8"',
     "Content-Transfer-Encoding: 8bit",
@@ -161,6 +208,78 @@ export async function sendWithGoogle(
   });
 }
 
+function encodedWord(value: string) {
+  return `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
+}
+
+function addressHeader(values: ComposeMessageInput["recipients"]["to"]) {
+  return values
+    .map((value) =>
+      value.name && value.name.toLowerCase() !== value.address.toLowerCase()
+        ? `${encodedWord(value.name)} <${safeMailHeader(value.address)}>`
+        : safeMailHeader(value.address),
+    )
+    .join(", ");
+}
+
+function buildGoogleMIME(input: ComposeMessageInput, from: string) {
+  const mixedBoundary = `rubidium-mixed-${crypto.randomUUID()}`;
+  const alternativeBoundary = `rubidium-alt-${crypto.randomUUID()}`;
+  const headers = [
+    `From: ${safeMailHeader(from)}`,
+    `To: ${addressHeader(input.recipients.to)}`,
+    ...(input.recipients.cc.length ? [`Cc: ${addressHeader(input.recipients.cc)}`] : []),
+    ...(input.recipients.bcc.length ? [`Bcc: ${addressHeader(input.recipients.bcc)}`] : []),
+    `Subject: ${encodedWord(input.subject)}`,
+    ...(input.inReplyTo ? [`In-Reply-To: ${safeMailHeader(input.inReplyTo)}`] : []),
+    ...(input.references?.length ? [`References: ${input.references.map(safeMailHeader).join(" ")}`] : []),
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/mixed; boundary=\"${mixedBoundary}\"`,
+    "",
+    `--${mixedBoundary}`,
+    `Content-Type: multipart/alternative; boundary=\"${alternativeBoundary}\"`,
+    "",
+    `--${alternativeBoundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    Buffer.from(input.bodyText, "utf8").toString("base64"),
+    `--${alternativeBoundary}`,
+    'Content-Type: text/html; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    Buffer.from(input.bodyHtml || `<p>${input.bodyText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/\n/g, "<br>")}</p>`, "utf8").toString("base64"),
+    `--${alternativeBoundary}--`,
+  ];
+  for (const attachment of input.attachments ?? []) {
+    headers.push(
+      `--${mixedBoundary}`,
+      `Content-Type: ${safeMailHeader(attachment.mimeType)}; name=\"${encodedWord(attachment.filename)}\"`,
+      "Content-Transfer-Encoding: base64",
+      `Content-Disposition: ${attachment.inline ? "inline" : "attachment"}; filename=\"${encodedWord(attachment.filename)}\"`,
+      ...(attachment.contentId ? [`Content-ID: <${safeMailHeader(attachment.contentId)}>`] : []),
+      "",
+      attachment.contentBase64.replace(/\s+/g, ""),
+    );
+  }
+  headers.push(`--${mixedBoundary}--`, "");
+  return headers.join("\r\n");
+}
+
+export async function sendRichWithGoogle(
+  account: StoredAccount,
+  input: ComposeMessageInput,
+) {
+  const raw = buildGoogleMIME(input, account.email);
+  await gmailFetch(account, "/users/me/messages/send", {
+    method: "POST",
+    body: JSON.stringify({
+      ...(input.threadId && input.replyMode !== "forward" ? { threadId: input.threadId } : {}),
+      raw: Buffer.from(raw, "utf8").toString("base64url"),
+    }),
+  });
+}
+
 function header(part: GmailPart | undefined, name: string): string | undefined {
   return part?.headers?.find(
     (candidate) => candidate.name.toLowerCase() === name.toLowerCase(),
@@ -170,24 +289,82 @@ function header(part: GmailPart | undefined, name: string): string | undefined {
 function collectBodies(part: GmailPart | undefined): {
   plain: string[];
   html: string[];
-  hasAttachments: boolean;
+  attachments: MailAttachment[];
+  mimeTree: MIMEPart | null;
 } {
-  const result = { plain: [] as string[], html: [] as string[], hasAttachments: false };
-  function visit(candidate: GmailPart | undefined) {
-    if (!candidate) return;
-    if (candidate.filename || candidate.body?.attachmentId) result.hasAttachments = true;
-    const data = decodeBase64Url(candidate.body?.data);
+  const result = {
+    plain: [] as string[],
+    html: [] as string[],
+    attachments: [] as MailAttachment[],
+    mimeTree: null as MIMEPart | null,
+  };
+  const partCharset = (candidate: GmailPart | undefined) =>
+    header(candidate, "Content-Type")
+      ?.match(/\bcharset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))/i)
+      ?.slice(1)
+      .find(Boolean) || "utf-8";
+  function visit(candidate: GmailPart | undefined, path: string): MIMEPart | null {
+    if (!candidate) return null;
+    const contentId = normalizeContentId(header(candidate, "Content-ID"));
+    const dispositionHeader = header(candidate, "Content-Disposition")?.toLowerCase() || "";
+    const filename = candidate.filename || "";
+    const attachmentId = candidate.body?.attachmentId || "";
+    const isBody = candidate.mimeType === "text/plain" || candidate.mimeType === "text/html";
+    const isAttachment = Boolean(filename || attachmentId || (contentId && !isBody));
+    const charset = partCharset(candidate);
+    const transferEncoding = header(candidate, "Content-Transfer-Encoding") || null;
+    const data = decodeBase64Url(candidate.body?.data, charset);
     if (data && candidate.mimeType === "text/plain") result.plain.push(data);
     if (data && candidate.mimeType === "text/html") result.html.push(data);
-    candidate.parts?.forEach(visit);
+    if (isAttachment) {
+      const inline = dispositionHeader.includes("inline") || Boolean(contentId);
+      result.attachments.push({
+        id: candidate.partId || path,
+        providerAttachmentId: attachmentId || candidate.partId || path,
+        filename: filename || (inline ? "inline-image" : "attachment"),
+        mimeType: candidate.mimeType || "application/octet-stream",
+        size: Number(candidate.body?.size || 0),
+        contentId,
+        disposition: inline ? "inline" : "attachment",
+        inline,
+        ...(candidate.body?.data
+          ? {
+              contentBase64: Buffer.from(
+                candidate.body.data.replace(/-/g, "+").replace(/_/g, "/"),
+                "base64",
+              ).toString("base64"),
+            }
+          : {}),
+      });
+    }
+    const children = (candidate.parts ?? [])
+      .map((child, index) => visit(child, `${path}.${index}`))
+      .filter((child): child is MIMEPart => Boolean(child));
+    return {
+      id: candidate.partId || path,
+      mimeType: candidate.mimeType || "application/octet-stream",
+      filename,
+      disposition: isAttachment
+        ? dispositionHeader.includes("inline") || contentId
+          ? "inline"
+          : "attachment"
+        : null,
+      contentId,
+      size: Number(candidate.body?.size || 0),
+      providerAttachmentId: attachmentId || null,
+      charset: charset || null,
+      transferEncoding,
+      children,
+    };
   }
-  visit(part);
+  result.mimeTree = visit(part, "0");
   return result;
 }
 
 function normalizeGmailMessage(message: GmailMessage): NormalizedMessage {
   const bodies = collectBodies(message.payload);
-  const html = bodies.html.join("\n");
+  const rawHtml = bodies.html.join("\n");
+  const html = rawHtml ? sanitizeEmailHtml(rawHtml) : "";
   const text = cleanText(bodies.plain.join("\n") || stripHtml(html));
   const receivedAt = new Date(Number(message.internalDate ?? Date.now())).toISOString();
   return {
@@ -201,14 +378,77 @@ function normalizeGmailMessage(message: GmailMessage): NormalizedMessage {
     from: parseAddress(header(message.payload, "From")),
     to: parseAddressList(header(message.payload, "To")),
     cc: parseAddressList(header(message.payload, "Cc")),
+    bcc: parseAddressList(header(message.payload, "Bcc")),
     receivedAt,
     isRead: !message.labelIds?.includes("UNREAD"),
-    hasAttachments: bodies.hasAttachments,
+    flagged: Boolean(message.labelIds?.includes("STARRED")),
+    hasAttachments: bodies.attachments.length > 0,
+    attachments: bodies.attachments,
+    headers: {
+      messageId: header(message.payload, "Message-ID") || null,
+      inReplyTo: header(message.payload, "In-Reply-To") || null,
+      references: (header(message.payload, "References") || "").split(/\s+/).filter(Boolean),
+      replyTo: parseAddressList(header(message.payload, "Reply-To")),
+      listUnsubscribe: header(message.payload, "List-Unsubscribe") || null,
+    },
+    mimeTree: bodies.mimeTree,
     labels: message.labelIds ?? [],
   };
 }
 
-async function fetchAndStore(account: StoredAccount, ids: string[]) {
+export async function downloadGoogleAttachment(
+  account: StoredAccount,
+  providerMessageId: string,
+  providerAttachmentId: string,
+): Promise<Buffer> {
+  const result = await gmailFetch<{ data?: string }>(
+    account,
+    `/users/me/messages/${encodeURIComponent(providerMessageId)}/attachments/${encodeURIComponent(providerAttachmentId)}`,
+  );
+  return Buffer.from((result.data || "").replace(/-/g, "+").replace(/_/g, "/"), "base64");
+}
+
+export async function listGoogleMailboxes(account: StoredAccount): Promise<Mailbox[]> {
+  const result = await gmailFetch<{
+    labels?: Array<{
+      id: string;
+      name?: string;
+      type?: string;
+      messagesUnread?: number;
+    }>;
+  }>(account, "/users/me/labels");
+  const kinds: Record<string, Mailbox["kind"]> = {
+    INBOX: "inbox",
+    SENT: "sent",
+    DRAFT: "drafts",
+    SPAM: "junk",
+    TRASH: "trash",
+  };
+  return (result.labels ?? [])
+    .filter((label) => !["UNREAD", "STARRED", "IMPORTANT", "CHAT"].includes(label.id))
+    .map((label) => ({
+      id: label.id,
+      accountId: account.id,
+      provider: "google",
+      name: label.name || label.id,
+      kind: kinds[label.id] || "label",
+      unreadCount: Number(label.messagesUnread || 0),
+      system: label.type === "system",
+    }));
+}
+
+export async function watchGoogleInbox(account: StoredAccount, topicName: string) {
+  return gmailFetch<{ historyId: string; expiration: string }>(account, "/users/me/watch", {
+    method: "POST",
+    body: JSON.stringify({ topicName, labelIds: ["INBOX"], labelFilterBehavior: "include" }),
+  });
+}
+
+async function fetchAndStore(
+  account: StoredAccount,
+  ids: string[],
+  notify = false,
+) {
   let processed = 0;
   for (let index = 0; index < ids.length; index += 20) {
     const batch = ids.slice(index, index + 20);
@@ -220,10 +460,14 @@ async function fetchAndStore(account: StoredAccount, ids: string[]) {
         ),
       ),
     );
-    messages.forEach((message) => {
-      upsertMessage(account, normalizeGmailMessage(message));
+    for (const message of messages) {
+      const normalized = normalizeGmailMessage(message);
+      upsertMessage(account, normalized);
+      if (notify && normalized.labels.includes("INBOX")) {
+        await notifyNewMail(account, normalized).catch(() => []);
+      }
       processed += 1;
-    });
+    }
   }
   return processed;
 }
@@ -298,7 +542,7 @@ export async function syncGoogleAccount(
         deleteProviderMessage(account.id, message.id);
       });
     }
-    const processed = await fetchAndStore(account, [...touched]);
+    const processed = await fetchAndStore(account, [...touched], true);
     const nextCursor: GoogleCursor = {
       phase: "incremental",
       historyId: page.historyId ?? cursor.historyId,

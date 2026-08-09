@@ -9,6 +9,7 @@ struct RubidiumThreadSummary: Codable, Identifiable, Hashable {
     let id: String
     let accountId: String
     let provider: String
+    let providerThreadId: String
     let email: String
     let displayName: String
     let subject: String
@@ -17,6 +18,13 @@ struct RubidiumThreadSummary: Codable, Identifiable, Hashable {
     let labels: [String]
     let lastMessageAt: String
     let unread: Bool
+    let flagged: Bool
+    let archived: Bool
+    let snoozedUntil: String?
+    let muted: Bool
+    let vip: Bool
+    let syncVersion: Int
+    let attachmentCount: Int
     let messageCount: Int
 }
 
@@ -71,7 +79,7 @@ struct RubidiumCalendarEvent: Codable, Identifiable, Hashable {
     let editable: Bool
 }
 
-private struct RubidiumThreadsResponse: Decodable {
+struct RubidiumThreadsResponse: Decodable {
     let threads: [RubidiumThreadSummary]
 }
 
@@ -100,21 +108,34 @@ private struct RubidiumCalendarSyncResult: Decodable {
 @MainActor
 final class RubidiumNativeStore: ObservableObject {
     @Published var threads: [RubidiumThreadSummary] = []
+    @Published var searchThreads: [RubidiumThreadSummary] = []
     @Published var accounts: [RubidiumAccount] = []
     @Published var sources: [RubidiumCalendarSource] = []
     @Published var events: [RubidiumCalendarEvent] = []
+    @Published var mailboxes: [RubidiumMailbox] = []
+    @Published var activeThread: RubidiumThreadDetail?
+    @Published var isRefreshingMail = false
+    @Published var mailActionError: String?
+    @Published var notificationPreferences = RubidiumNotificationPreferences.standard
     @Published var isLoading = false
     @Published var isSyncingCalendar = false
     @Published var errorMessage: String?
     @Published var accountsErrorMessage: String?
     @Published var calendarErrorMessage: String?
 
-    private weak var browser: RubidiumBrowserModel?
+    weak var browser: RubidiumBrowserModel?
     private var hasLoaded = false
     private var lastCalendarRefreshAttempt: Date?
 
     func attach(_ browser: RubidiumBrowserModel) {
         self.browser = browser
+        if threads.isEmpty {
+            threads = RubidiumLocalCache.shared.load([RubidiumThreadSummary].self, key: "threads") ?? []
+            accounts = RubidiumLocalCache.shared.load([RubidiumAccount].self, key: "accounts") ?? []
+            sources = RubidiumLocalCache.shared.load([RubidiumCalendarSource].self, key: "calendar-sources") ?? []
+            events = RubidiumLocalCache.shared.load([RubidiumCalendarEvent].self, key: "calendar-events") ?? []
+            mailboxes = RubidiumLocalCache.shared.load([RubidiumMailbox].self, key: "mailboxes") ?? []
+        }
     }
 
     func loadAll(force: Bool = false) async {
@@ -127,6 +148,7 @@ final class RubidiumNativeStore: ObservableObject {
         do {
             let payload: RubidiumAccountsResponse = try await browser.api("/api/accounts")
             accounts = payload.accounts
+            RubidiumLocalCache.shared.save(accounts, key: "accounts")
         } catch {
             accountsErrorMessage = error.localizedDescription
         }
@@ -134,6 +156,7 @@ final class RubidiumNativeStore: ObservableObject {
         do {
             let payload: RubidiumSourcesResponse = try await browser.api("/api/calendar/sources")
             sources = payload.sources
+            RubidiumLocalCache.shared.save(sources, key: "calendar-sources")
             try await loadCalendarEvents()
         } catch {
             calendarErrorMessage = error.localizedDescription
@@ -146,6 +169,7 @@ final class RubidiumNativeStore: ObservableObject {
         do {
             let payload: RubidiumThreadsResponse = try await browser.api("/api/threads?limit=120")
             threads = payload.threads
+            RubidiumLocalCache.shared.save(threads, key: "threads")
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -168,6 +192,33 @@ final class RubidiumNativeStore: ObservableObject {
         }
         let payload: RubidiumEventsResponse = try await browser.api(components.string ?? "/api/calendar/events")
         events = payload.events
+        RubidiumLocalCache.shared.save(events, key: "calendar-events")
+    }
+
+    func searchMail(_ query: String) async {
+        guard let browser else { return }
+        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            searchThreads = []
+            return
+        }
+        do {
+            var components = URLComponents()
+            components.path = "/api/threads"
+            components.queryItems = [
+                URLQueryItem(name: "limit", value: "160"),
+                URLQueryItem(name: "q", value: normalized),
+            ]
+            let payload: RubidiumThreadsResponse = try await browser.api(
+                components.string ?? "/api/threads"
+            )
+            guard !Task.isCancelled else { return }
+            searchThreads = payload.threads
+        } catch is CancellationError {
+            return
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func syncCalendar() async {
@@ -380,12 +431,23 @@ private struct RubidiumNativeNavigationBar: View {
 struct RubidiumNativeSearchView: View {
     @ObservedObject var store: RubidiumNativeStore
     let openThread: (RubidiumThreadSummary) -> Void
+    let openEvent: (RubidiumCalendarEvent) -> Void
     @State private var query = ""
+
+    init(
+        store: RubidiumNativeStore,
+        openThread: @escaping (RubidiumThreadSummary) -> Void,
+        openEvent: @escaping (RubidiumCalendarEvent) -> Void = { _ in }
+    ) {
+        self.store = store
+        self.openThread = openThread
+        self.openEvent = openEvent
+    }
 
     private var matchingThreads: [RubidiumThreadSummary] {
         let terms = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !terms.isEmpty else { return Array(store.threads.prefix(24)) }
-        return store.threads.filter { thread in
+        let local = store.threads.filter { thread in
             [thread.subject, thread.snippet, thread.displayName, thread.email]
                 .joined(separator: " ")
                 .lowercased()
@@ -394,6 +456,8 @@ struct RubidiumNativeSearchView: View {
                 "\($0.name) \($0.address)".lowercased().contains(terms)
             }
         }
+        var seen = Set<String>()
+        return (local + store.searchThreads).filter { seen.insert($0.id).inserted }
     }
 
     private var matchingEvents: [RubidiumCalendarEvent] {
@@ -420,7 +484,12 @@ struct RubidiumNativeSearchView: View {
                         if !matchingEvents.isEmpty {
                             Section("Calendar") {
                                 ForEach(matchingEvents.prefix(8)) { event in
-                                    RubidiumCalendarEventRow(event: event)
+                                    Button {
+                                        openEvent(event)
+                                    } label: {
+                                        RubidiumCalendarEventRow(event: event)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
                             }
                         }
@@ -445,11 +514,21 @@ struct RubidiumNativeSearchView: View {
                 prompt: "Mail and calendar"
             )
             .textInputAutocapitalization(.never)
+            .task(id: query) {
+                guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    store.searchThreads = []
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(280))
+                guard !Task.isCancelled else { return }
+                await store.searchMail(query)
+            }
         }
     }
 }
 
 struct RubidiumThreadRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let thread: RubidiumThreadSummary
 
     var body: some View {
@@ -458,28 +537,39 @@ struct RubidiumThreadRow: View {
                 .fill(thread.provider == "google" ? Color.red.opacity(0.14) : Color.blue.opacity(0.14))
                 .frame(width: 42, height: 42)
                 .overlay {
-                    Text(initials)
+                    Text(dynamicTypeSize.isAccessibilitySize ? String(initials.prefix(1)) : initials)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.primary)
+                        .dynamicTypeSize(.small ... .large)
+                        .lineLimit(1)
                 }
 
             VStack(alignment: .leading, spacing: 3) {
-                HStack {
+                if dynamicTypeSize.isAccessibilitySize {
                     Text(thread.displayName.isEmpty ? thread.email : thread.displayName)
                         .font(.subheadline.weight(thread.unread ? .bold : .semibold))
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
+                        .lineLimit(2)
                     Text(RubidiumDate.short(thread.lastMessageAt))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } else {
+                    HStack {
+                        Text(thread.displayName.isEmpty ? thread.email : thread.displayName)
+                            .font(.subheadline.weight(thread.unread ? .bold : .semibold))
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(RubidiumDate.short(thread.lastMessageAt))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Text(thread.subject)
                     .font(.subheadline.weight(thread.unread ? .semibold : .regular))
-                    .lineLimit(1)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                 Text(thread.snippet)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
             }
         }
         .padding(.vertical, 4)
@@ -495,6 +585,7 @@ struct RubidiumThreadRow: View {
 struct RubidiumNativeCalendarView: View {
     @ObservedObject var store: RubidiumNativeStore
     @ObservedObject var browser: RubidiumBrowserModel
+    @State private var isCreatingEvent = false
 
     private var groupedEvents: [(String, [RubidiumCalendarEvent])] {
         let groups = Dictionary(grouping: store.events) { RubidiumDate.day($0.start) }
@@ -537,7 +628,7 @@ struct RubidiumNativeCalendarView: View {
                             Section(day) {
                                 ForEach(events) { event in
                                     NavigationLink {
-                                        RubidiumCalendarEventDetailView(event: event)
+                                        RubidiumCalendarEventDetailView(store: store, event: event)
                                     } label: {
                                         RubidiumCalendarEventRow(event: event)
                                     }
@@ -554,6 +645,14 @@ struct RubidiumNativeCalendarView: View {
                 await store.prepareCalendar()
             }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        isCreatingEvent = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("New event")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         RubidiumHaptics.shared.play(.action)
@@ -568,6 +667,9 @@ struct RubidiumNativeCalendarView: View {
                     .disabled(store.isSyncingCalendar)
                     .accessibilityLabel("Sync calendars")
                 }
+            }
+            .sheet(isPresented: $isCreatingEvent) {
+                RubidiumCalendarComposer(store: store)
             }
         }
     }
@@ -657,7 +759,11 @@ struct RubidiumCalendarEventRow: View {
 }
 
 struct RubidiumCalendarEventDetailView: View {
+    @ObservedObject var store: RubidiumNativeStore
     let event: RubidiumCalendarEvent
+    @Environment(\.dismiss) private var dismiss
+    @State private var confirmDelete = false
+    @State private var isEditing = false
 
     var body: some View {
         List {
@@ -695,9 +801,39 @@ struct RubidiumCalendarEventDetailView: View {
                 LabeledContent("Response", value: responseLabel)
                 LabeledContent("Provider", value: event.provider == "google" ? "Google" : "Microsoft")
             }
+            Section("Response") {
+                HStack {
+                    Button("Accept", systemImage: "checkmark") { rsvp("accepted") }
+                    Spacer()
+                    Button("Maybe", systemImage: "questionmark") { rsvp("tentative") }
+                    Spacer()
+                    Button("Decline", systemImage: "xmark") { rsvp("declined") }
+                }
+                .buttonStyle(.bordered)
+            }
+            if event.editable {
+                Section {
+                    Button("Delete Event", systemImage: "trash", role: .destructive) {
+                        confirmDelete = true
+                    }
+                }
+            }
         }
         .navigationTitle("Event")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if event.editable {
+                ToolbarItem(placement: .topBarTrailing) { Button("Edit") { isEditing = true } }
+            }
+        }
+        .sheet(isPresented: $isEditing) {
+            RubidiumCalendarComposer(store: store, event: event)
+        }
+        .confirmationDialog("Delete this event?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete Event", role: .destructive) {
+                Task { if await store.delete(event: event) { dismiss() } }
+            }
+        }
     }
 
     private var dateLabel: String {
@@ -721,12 +857,125 @@ struct RubidiumCalendarEventDetailView: View {
         default: event.responseStatus.capitalized
         }
     }
+
+    private func rsvp(_ response: String) {
+        Task { _ = await store.respond(to: event, response: response) }
+    }
+}
+
+struct RubidiumCalendarComposer: View {
+    @ObservedObject var store: RubidiumNativeStore
+    var event: RubidiumCalendarEvent? = nil
+    @Environment(\.dismiss) private var dismiss
+    @State private var sourceId = ""
+    @State private var title = ""
+    @State private var start = Date().addingTimeInterval(3600)
+    @State private var end = Date().addingTimeInterval(5400)
+    @State private var allDay = false
+    @State private var attendees = ""
+    @State private var location = ""
+    @State private var notes = ""
+    @State private var videoCall = true
+    @State private var isSaving = false
+    @State private var error: String?
+
+    private var writableSources: [RubidiumCalendarSource] {
+        store.sources.filter { $0.accessRole == "writer" || $0.accessRole == "owner" }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Event title", text: $title)
+                    Picker("Calendar", selection: $sourceId) {
+                        ForEach(writableSources) { source in
+                            Text("\(source.name) · \(source.accountEmail)").tag(source.id)
+                        }
+                    }
+                }
+                Section("Time") {
+                    Toggle("All-day", isOn: $allDay)
+                    DatePicker("Starts", selection: $start, displayedComponents: allDay ? [.date] : [.date, .hourAndMinute])
+                    DatePicker("Ends", selection: $end, in: start..., displayedComponents: allDay ? [.date] : [.date, .hourAndMinute])
+                }
+                Section("People and place") {
+                    TextField("Attendees", text: $attendees, prompt: Text("email@example.com"))
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.emailAddress)
+                    TextField("Location", text: $location)
+                    Toggle("Add video call", isOn: $videoCall)
+                }
+                Section("Notes") {
+                    TextEditor(text: $notes).frame(minHeight: 120)
+                }
+                if let error { Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) } }
+            }
+            .navigationTitle(event == nil ? "New Event" : "Edit Event")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(event == nil ? "Add" : "Save") { Task { await save() } }
+                        .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sourceId.isEmpty || end <= start || isSaving)
+                }
+            }
+            .onAppear {
+                if let event {
+                    sourceId = event.sourceId
+                    title = event.title
+                    start = RubidiumDate.parse(event.start) ?? start
+                    end = RubidiumDate.parse(event.end) ?? end
+                    allDay = event.allDay
+                    location = event.location
+                    videoCall = event.joinUrl != nil
+                } else {
+                    sourceId = writableSources.first(where: { $0.primary })?.id ?? writableSources.first?.id ?? ""
+                }
+            }
+        }
+    }
+
+    private func save() async {
+        isSaving = true
+        defer { isSaving = false }
+        let formatter = ISO8601DateFormatter()
+        let emails = attendees.split(whereSeparator: { $0 == "," || $0 == ";" || $0 == "\n" })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { $0.contains("@") }
+        do {
+            var body: [String: Any] = [
+                "sourceId": sourceId,
+                "title": title,
+                "start": formatter.string(from: start),
+                "end": formatter.string(from: end),
+                "allDay": allDay,
+                "timeZone": TimeZone.current.identifier,
+                "attendeeEmails": emails,
+                "description": notes,
+                "location": location,
+                "onlineMeeting": videoCall,
+            ]
+            if let event {
+                body.removeValue(forKey: "sourceId")
+                try await store.updateCalendarEvent(event, body: body)
+            } else {
+                try await store.createCalendarEvent(body)
+            }
+            RubidiumHaptics.shared.play(.success)
+            dismiss()
+        } catch {
+            self.error = error.localizedDescription
+            RubidiumHaptics.shared.play(.error)
+        }
+    }
 }
 
 struct RubidiumNativeAccountsView: View {
     @ObservedObject var store: RubidiumNativeStore
     @ObservedObject var browser: RubidiumBrowserModel
     @ObservedObject var security: RubidiumAppLockModel
+    @ObservedObject private var notifications = RubidiumNotifications.shared
     @AppStorage(RubidiumAppearance.storageKey) private var appearanceRaw = RubidiumAppearance.system.rawValue
 
     var body: some View {
@@ -781,6 +1030,52 @@ struct RubidiumNativeAccountsView: View {
                     }
                 }
 
+                Section("Notifications") {
+                    Button {
+                        Task { await notifications.requestAuthorization() }
+                    } label: {
+                        LabeledContent(
+                            "New mail notifications",
+                            value: notificationStatus
+                        )
+                    }
+                    Toggle("Enable new mail", isOn: preferenceBinding(\.enabled))
+                    Picker("Notify me for", selection: Binding(
+                        get: { store.notificationPreferences.scope },
+                        set: { value in updatePreference { $0.scope = value } }
+                    )) {
+                        Text("All inboxes").tag("all")
+                        Text("Priority only").tag("priority")
+                        Text("Selected accounts").tag("custom")
+                    }
+                    if store.notificationPreferences.scope == "custom" {
+                        ForEach(store.accounts) { account in
+                            Toggle(account.email, isOn: Binding(
+                                get: { store.notificationPreferences.accountIds.contains(account.id) },
+                                set: { enabled in
+                                    updatePreference { preferences in
+                                        if enabled {
+                                            if !preferences.accountIds.contains(account.id) { preferences.accountIds.append(account.id) }
+                                        } else {
+                                            preferences.accountIds.removeAll { $0 == account.id }
+                                        }
+                                    }
+                                }
+                            ))
+                        }
+                    }
+                    Toggle("Show sender", isOn: preferenceBinding(\.showSender))
+                    Toggle("Show subject", isOn: preferenceBinding(\.showSubject))
+                    Toggle("Show message preview", isOn: preferenceBinding(\.showBody))
+                    Toggle("Sound", isOn: preferenceBinding(\.sound))
+                    Toggle("Badge", isOn: preferenceBinding(\.badge))
+                    if let error = notifications.errorMessage {
+                        Text(error)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                }
+
                 if let error = store.accountsErrorMessage ?? browser.errorMessage {
                     Section {
                         Label(error, systemImage: "exclamationmark.triangle")
@@ -800,6 +1095,28 @@ struct RubidiumNativeAccountsView: View {
                 }
             }
         }
+    }
+
+    private var notificationStatus: String {
+        switch notifications.authorizationStatus {
+        case .authorized, .provisional, .ephemeral: "On"
+        case .denied: "Off in Settings"
+        case .notDetermined: "Set Up"
+        @unknown default: "Unknown"
+        }
+    }
+
+    private func preferenceBinding(_ keyPath: WritableKeyPath<RubidiumNotificationPreferences, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { store.notificationPreferences[keyPath: keyPath] },
+            set: { value in updatePreference { $0[keyPath: keyPath] = value } }
+        )
+    }
+
+    private func updatePreference(_ change: (inout RubidiumNotificationPreferences) -> Void) {
+        var preferences = store.notificationPreferences
+        change(&preferences)
+        Task { await store.updateNotificationPreferences(preferences) }
     }
 
     private func providerButton(_ provider: String, title: String, subtitle: String) -> some View {

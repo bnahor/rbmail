@@ -8,7 +8,6 @@ struct RubidiumRootView: View {
     @StateObject private var intelligence = RubidiumIntelligenceModel()
     @StateObject private var nativeStore = RubidiumNativeStore()
     @StateObject private var security = RubidiumAppLockModel()
-    @State private var selectedTab: RubidiumNativeTab = .mail
     @State private var isShowingIntelligence = false
 
     var body: some View {
@@ -18,16 +17,22 @@ struct RubidiumRootView: View {
 
             // The persistent web view owns the secure HTTP-only session cookie.
             // Native surfaces request data through that same authenticated origin.
-            RubidiumNativeShell(
+            RubidiumMailAppShell(
                 browser: browser,
                 store: nativeStore,
                 security: security,
-                selection: $selectedTab,
-                mail: AnyView(RubidiumWebView(model: browser)),
                 presentIntelligence: presentIntelligence
             )
             .opacity(isSignedIn ? 1 : 0)
             .allowsHitTesting(isSignedIn)
+
+            // WebKit is retained only as a secure first-party session broker.
+            // It never renders the mailbox, composer, search, or navigation.
+            RubidiumWebView(model: browser)
+                .frame(width: 1, height: 1)
+                .opacity(0.001)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
 
             switch browser.sessionState {
             case .loading:
@@ -63,11 +68,14 @@ struct RubidiumRootView: View {
         .animation(.smooth(duration: 0.24), value: security.isUnlocked)
         .preferredColorScheme(appearance.colorScheme)
         .sheet(isPresented: $isShowingIntelligence) {
-            RubidiumIntelligenceView(intelligence: intelligence)
-                .environmentObject(browser)
+            RubidiumIntelligenceView(
+                intelligence: intelligence,
+                context: nativeStore.intelligenceContext
+            )
         }
         .onAppear {
             nativeStore.attach(browser)
+            RubidiumNotifications.shared.attach(browser)
             RubidiumHaptics.shared.prepare()
         }
         .onChange(of: browser.contentRevision) { _, _ in
@@ -87,9 +95,6 @@ struct RubidiumRootView: View {
             @unknown default:
                 break
             }
-        }
-        .onChange(of: selectedTab) { _, _ in
-            RubidiumHaptics.shared.play(.selection)
         }
         .onChange(of: browser.errorMessage) { _, error in
             if error != nil { RubidiumHaptics.shared.play(.error) }

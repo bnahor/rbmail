@@ -37,6 +37,8 @@
 	<true/>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Use Face ID to keep your Rubidium inbox private when you leave the app.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save images from your mail to your photo library when you choose Save to Photos.</string>
 	<key>RBMailAppURL</key>
 	<string>https://rbmail-production.up.railway.app</string>
 	<key>UIApplicationSceneManifest</key>
@@ -52,6 +54,10 @@
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arm64</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
 	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
