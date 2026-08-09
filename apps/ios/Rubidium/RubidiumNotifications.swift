@@ -99,7 +99,7 @@ final class RubidiumNotifications: NSObject, ObservableObject, UNUserNotificatio
         case "RUBIDIUM_FLAG": action = "flag"
         default: return
         }
-        let encoded = threadId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? threadId
+        let encoded = RubidiumURL.pathSegment(threadId)
         do {
             struct ActionResponse: Decodable { let ok: Bool }
             let _: ActionResponse = try await browser.api(

@@ -1,5 +1,15 @@
 import SwiftUI
 
+enum RubidiumURL {
+    private static let pathSegmentCharacters = CharacterSet.alphanumerics.union(
+        CharacterSet(charactersIn: "-._~")
+    )
+
+    static func pathSegment(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: pathSegmentCharacters) ?? value
+    }
+}
+
 struct RubidiumMailAddress: Codable, Hashable {
     let name: String
     let address: String
@@ -269,183 +279,27 @@ final class RubidiumNativeStore: ObservableObject {
     }
 }
 
-enum RubidiumNativeTab: Hashable {
-    case mail
-    case today
-    case search
-    case accounts
-}
-
-struct RubidiumNativeShell: View {
-    @ObservedObject var browser: RubidiumBrowserModel
-    @ObservedObject var store: RubidiumNativeStore
-    @ObservedObject var security: RubidiumAppLockModel
-    @Binding var selection: RubidiumNativeTab
-    let mail: AnyView
-    let presentIntelligence: () -> Void
-
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .bottom) {
-            // Keep the WebKit session alive while native destinations are
-            // visible; it owns the secure first-party cookie used by the
-            // provider-neutral native API client.
-            mail
-                // Let the mailbox surface paint behind the status bar and
-                // Dynamic Island. The web header applies the measured top
-                // inset once, so controls remain in the tappable safe area.
-                .ignoresSafeArea(.container, edges: [.top, .bottom])
-                .opacity(selection == .mail ? 1 : 0)
-                .allowsHitTesting(selection == .mail)
-                .accessibilityHidden(selection != .mail)
-
-            RubidiumNativeCalendarView(store: store, browser: browser)
-                .opacity(selection == .today ? 1 : 0)
-                .allowsHitTesting(selection == .today)
-                .accessibilityHidden(selection != .today)
-
-            RubidiumNativeSearchView(store: store) { thread in
-                RubidiumHaptics.shared.play(.selection)
-                selection = .mail
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
-                    browser.openThread(thread.id)
-                }
-            }
-            .opacity(selection == .search ? 1 : 0)
-            .allowsHitTesting(selection == .search)
-            .accessibilityHidden(selection != .search)
-
-            RubidiumNativeAccountsView(store: store, browser: browser, security: security)
-                .opacity(selection == .accounts ? 1 : 0)
-                .allowsHitTesting(selection == .accounts)
-                .accessibilityHidden(selection != .accounts)
-
-            RubidiumNativeNavigationBar(
-                selection: $selection,
-                presentIntelligence: presentIntelligence
-            )
-            .padding(.horizontal, 12)
-            .padding(.bottom, geometry.safeAreaInsets.bottom + 6)
-            .zIndex(50)
-            }
-        }
-        // Let mail and native lists visually continue behind the home
-        // indicator. The control plane keeps its own measured safe padding.
-        .ignoresSafeArea(.container, edges: .bottom)
-        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
-    }
-}
-
-private struct RubidiumNativeNavigationBar: View {
-    @Binding var selection: RubidiumNativeTab
-    let presentIntelligence: () -> Void
-    @Namespace private var navigationNamespace
-
-    var body: some View {
-        HStack(spacing: 2) {
-            destination(.mail, title: "Mail", symbol: "envelope", selectedSymbol: "envelope.fill")
-            destination(.today, title: "Today", symbol: "calendar", selectedSymbol: "calendar")
-            intelligenceAction
-
-            destination(
-                .search,
-                title: "Search",
-                symbol: "magnifyingglass",
-                selectedSymbol: "magnifyingglass.circle.fill"
-            )
-            destination(
-                .accounts,
-                title: "Settings",
-                symbol: "gearshape",
-                selectedSymbol: "gearshape.fill"
-            )
-        }
-        .padding(5)
-        .frame(maxWidth: 460)
-        .rubidiumGlass(cornerRadius: 27, interactive: true)
-        .dynamicTypeSize(.xSmall ... .accessibility1)
-        .accessibilityElement(children: .contain)
-    }
-
-    private var intelligenceAction: some View {
-        Button(action: presentIntelligence) {
-            VStack(spacing: 2) {
-                Image(systemName: "sparkles")
-                    .contentTransition(.symbolEffect(.replace))
-                    .font(.system(size: 17, weight: .semibold))
-                Text("AI")
-                    .font(.system(size: 10, weight: .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-            }
-            .foregroundStyle(Color.secondary)
-            .frame(maxWidth: .infinity, minHeight: 52)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Rubidium Intelligence")
-        .accessibilityHint("Summarize, find next steps, or draft a reply using Apple's on-device model")
-    }
-
-    private func destination(
-        _ tab: RubidiumNativeTab,
-        title: String,
-        symbol: String,
-        selectedSymbol: String
-    ) -> some View {
-        Button {
-            guard selection != tab else { return }
-            withAnimation(.smooth(duration: 0.24, extraBounce: 0.02)) {
-                selection = tab
-            }
-        } label: {
-            VStack(spacing: 2) {
-                Image(systemName: selection == tab ? selectedSymbol : symbol)
-                    .contentTransition(.symbolEffect(.replace))
-                    .font(.system(size: 17, weight: .semibold))
-                Text(title)
-                    .font(.system(size: 10, weight: .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-            }
-            .foregroundStyle(selection == tab ? Color.primary : Color.secondary)
-            .frame(maxWidth: .infinity, minHeight: 52)
-            .contentShape(Rectangle())
-            .background {
-                if selection == tab {
-                    Capsule(style: .continuous)
-                        .fill(.primary.opacity(0.1))
-                        .matchedGeometryEffect(
-                            id: "native-navigation-selection",
-                            in: navigationNamespace
-                        )
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(selection == tab ? .isSelected : [])
-    }
-}
-
 struct RubidiumNativeSearchView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var store: RubidiumNativeStore
     let openThread: (RubidiumThreadSummary) -> Void
     let openEvent: (RubidiumCalendarEvent) -> Void
     let openMailboxes: (() -> Void)?
+    let showsDismissButton: Bool
     @State private var query = ""
 
     init(
         store: RubidiumNativeStore,
         openThread: @escaping (RubidiumThreadSummary) -> Void,
         openEvent: @escaping (RubidiumCalendarEvent) -> Void = { _ in },
-        openMailboxes: (() -> Void)? = nil
+        openMailboxes: (() -> Void)? = nil,
+        showsDismissButton: Bool = true
     ) {
         self.store = store
         self.openThread = openThread
         self.openEvent = openEvent
         self.openMailboxes = openMailboxes
+        self.showsDismissButton = showsDismissButton
     }
 
     private var matchingThreads: [RubidiumThreadSummary] {
@@ -514,11 +368,8 @@ struct RubidiumNativeSearchView: View {
             }
             .background(RubidiumTheme.canvas.ignoresSafeArea())
             .navigationTitle("Search")
-            .searchable(
-                text: $query,
-                placement: .navigationBarDrawer(displayMode: .always),
-                prompt: "Mail and calendar"
-            )
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $query, prompt: "Mail and calendar")
             .textInputAutocapitalization(.never)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -528,7 +379,7 @@ struct RubidiumNativeSearchView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Open mailboxes")
-                    } else {
+                    } else if showsDismissButton {
                         Button("Close", systemImage: "xmark") { dismiss() }
                     }
                 }
@@ -892,14 +743,11 @@ struct RubidiumCalendarEventDetailView: View {
                 LabeledContent("Provider", value: event.provider == "google" ? "Google" : "Microsoft")
             }
             Section("Response") {
-                HStack {
-                    Button("Accept", systemImage: "checkmark") { rsvp("accepted") }
-                    Spacer()
-                    Button("Maybe", systemImage: "questionmark") { rsvp("tentative") }
-                    Spacer()
-                    Button("Decline", systemImage: "xmark") { rsvp("declined") }
+                HStack(spacing: 8) {
+                    responseButton("Accept", symbol: "checkmark", value: "accepted")
+                    responseButton("Maybe", symbol: "questionmark", value: "tentative")
+                    responseButton("Decline", symbol: "xmark", value: "declined")
                 }
-                .buttonStyle(.bordered)
             }
             if event.editable {
                 Section {
@@ -951,11 +799,36 @@ struct RubidiumCalendarEventDetailView: View {
     private func rsvp(_ response: String) {
         Task { _ = await store.respond(to: event, response: response) }
     }
+
+    private func responseButton(_ title: String, symbol: String, value: String) -> some View {
+        let selected = event.responseStatus.lowercased() == value
+        return Button {
+            rsvp(value)
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: symbol)
+                    .font(.body.weight(.semibold))
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, minHeight: 54)
+            .foregroundStyle(selected ? Color.white : Color.primary)
+            .background(
+                selected ? RubidiumTheme.accent : Color.primary.opacity(0.07),
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
 }
 
 struct RubidiumCalendarComposer: View {
     @ObservedObject var store: RubidiumNativeStore
     var event: RubidiumCalendarEvent? = nil
+    var prefillTitle = ""
+    var prefillAttendees: [String] = []
     @Environment(\.dismiss) private var dismiss
     @State private var sourceId = ""
     @State private var title = ""
@@ -980,8 +853,14 @@ struct RubidiumCalendarComposer: View {
                     TextField("Event title", text: $title)
                     Picker("Calendar", selection: $sourceId) {
                         ForEach(writableSources) { source in
-                            Text("\(source.name) · \(source.accountEmail)").tag(source.id)
+                            Text(source.name).tag(source.id)
                         }
+                    }
+                    if let selectedSource = writableSources.first(where: { $0.id == sourceId }) {
+                        Text(calendarContext(selectedSource))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
                 }
                 Section("Time") {
@@ -1021,6 +900,8 @@ struct RubidiumCalendarComposer: View {
                     videoCall = event.joinUrl != nil
                 } else {
                     sourceId = writableSources.first(where: { $0.primary })?.id ?? writableSources.first?.id ?? ""
+                    title = prefillTitle
+                    attendees = prefillAttendees.joined(separator: ", ")
                 }
             }
         }
@@ -1059,6 +940,11 @@ struct RubidiumCalendarComposer: View {
             RubidiumHaptics.shared.play(.error)
         }
     }
+
+    private func calendarContext(_ source: RubidiumCalendarSource) -> String {
+        let provider = source.provider == "google" ? "Google" : "Microsoft"
+        return "\(provider) · \(source.accountEmail)"
+    }
 }
 
 struct RubidiumNativeAccountsView: View {
@@ -1066,6 +952,7 @@ struct RubidiumNativeAccountsView: View {
     @ObservedObject var browser: RubidiumBrowserModel
     @ObservedObject var security: RubidiumAppLockModel
     var openMailboxes: (() -> Void)? = nil
+    var dismiss: (() -> Void)? = nil
     @ObservedObject private var notifications = RubidiumNotifications.shared
     @AppStorage(RubidiumAppearance.storageKey) private var appearanceRaw = RubidiumAppearance.system.rawValue
 
@@ -1187,6 +1074,8 @@ struct RubidiumNativeAccountsView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Open mailboxes")
+                    } else if let dismiss {
+                        Button("Close", systemImage: "xmark", action: dismiss)
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {

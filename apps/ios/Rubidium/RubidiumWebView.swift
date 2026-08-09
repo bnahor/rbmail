@@ -17,12 +17,6 @@ struct RubidiumAPIError: LocalizedError {
     var errorDescription: String? { message }
 }
 
-private struct RubidiumAPIEnvelope: Decodable {
-    let ok: Bool
-    let status: Int
-    let body: String
-}
-
 private struct RubidiumSessionEnvelope: Decodable {
     struct User: Decodable {
         let email: String
@@ -244,65 +238,50 @@ final class RubidiumBrowserModel: ObservableObject {
         guard let webView else {
             throw RubidiumAPIError(status: 0, message: "Rubidium is still starting.", code: nil)
         }
-        let bodyText: String
-        let hasBody: Bool
+        guard let requestURL = URL(string: path, relativeTo: appURL)?.absoluteURL,
+              requestURL.scheme == appURL.scheme,
+              requestURL.host == appURL.host else {
+            throw RubidiumAPIError(status: 0, message: "Rubidium could not construct a secure API URL.", code: nil)
+        }
+        var request = URLRequest(url: requestURL)
+        request.httpMethod = method
+        request.timeoutInterval = 30
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         if let body {
-            let data = try JSONSerialization.data(withJSONObject: body)
-            bodyText = String(decoding: data, as: UTF8.self)
-            hasBody = true
-        } else {
-            bodyText = ""
-            hasBody = false
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        // evaluateJavaScript cannot bridge a JavaScript Promise back to Swift
-        // and reports "unsupported type". callAsyncJavaScript awaits the
-        // fetch inside WebKit while preserving the WKWebView's HTTP-only
-        // Better Auth session cookie.
-        let script = """
-        try {
-          const response = await fetch(path, {
-            method,
-            credentials: 'include',
-            headers: {
-              ...headers,
-              ...(hasBody ? {'content-type': 'application/json'} : {})
-            },
-            body: hasBody ? bodyText : undefined
-          });
-          const text = await response.text();
-          return JSON.stringify({ok: response.ok, status: response.status, body: text});
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'The request could not be completed.';
-          return JSON.stringify({
-            ok: false,
-            status: 0,
-            body: JSON.stringify({error: message})
-          });
+        for (name, value) in headers {
+            request.setValue(value, forHTTPHeaderField: name)
         }
-        """
-        let result = try await webView.callAsyncJavaScript(
-            script,
-            arguments: [
-                "path": path,
-                "method": method,
-                "hasBody": hasBody,
-                "bodyText": bodyText,
-                "headers": headers,
-            ],
-            in: nil,
-            contentWorld: .page
-        )
-        guard let raw = result as? String,
-              let rawData = raw.data(using: .utf8) else {
+
+        // The hidden WKWebView remains the owner of the Better Auth session.
+        // Copy its first-party HTTP-only cookies into a native URLSession
+        // request so encoded provider identifiers never pass through the
+        // JavaScript URL parser.
+        let cookies = await withCheckedContinuation { continuation in
+            webView.configuration.websiteDataStore.httpCookieStore.getAllCookies {
+                continuation.resume(returning: $0)
+            }
+        }
+        let matchingCookies = cookies.filter { cookie in
+            guard let host = requestURL.host else { return false }
+            let domain = cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            return host == domain || host.hasSuffix(".\(domain)")
+        }
+        for (name, value) in HTTPCookie.requestHeaderFields(with: matchingCookies) {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw RubidiumAPIError(status: 0, message: "Rubidium returned an unreadable response.", code: nil)
         }
-        let envelope = try JSONDecoder().decode(RubidiumAPIEnvelope.self, from: rawData)
-        let data = Data(envelope.body.utf8)
-        if !envelope.ok {
+        guard (200..<300).contains(httpResponse.statusCode) else {
             let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             throw RubidiumAPIError(
-                status: envelope.status,
-                message: payload?["error"] as? String ?? "Request failed (\(envelope.status)).",
+                status: httpResponse.statusCode,
+                message: payload?["error"] as? String ?? "Request failed (\(httpResponse.statusCode)).",
                 code: payload?["code"] as? String
             )
         }

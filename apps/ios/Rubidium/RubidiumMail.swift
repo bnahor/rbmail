@@ -189,7 +189,7 @@ extension RubidiumNativeStore {
 
     func updateCalendarEvent(_ event: RubidiumCalendarEvent, body: [String: Any]) async throws {
         guard let browser else { return }
-        let id = event.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? event.id
+        let id = RubidiumURL.pathSegment(event.id)
         let _: RubidiumCalendarEventEnvelope = try await browser.api(
             "/api/calendar/events/\(id)",
             method: "PATCH",
@@ -202,7 +202,7 @@ extension RubidiumNativeStore {
     func respond(to event: RubidiumCalendarEvent, response: String) async -> Bool {
         guard let browser else { return false }
         do {
-            let id = event.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? event.id
+            let id = RubidiumURL.pathSegment(event.id)
             let _: RubidiumCalendarEventEnvelope = try await browser.api(
                 "/api/calendar/events/\(id)/rsvp",
                 method: "POST",
@@ -222,7 +222,7 @@ extension RubidiumNativeStore {
     func delete(event: RubidiumCalendarEvent) async -> Bool {
         guard let browser else { return false }
         do {
-            let id = event.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? event.id
+            let id = RubidiumURL.pathSegment(event.id)
             struct DeleteResponse: Decodable { let deleted: Bool }
             let _: DeleteResponse = try await browser.api(
                 "/api/calendar/events/\(id)",
@@ -279,7 +279,7 @@ extension RubidiumNativeStore {
 
     func loadThread(_ id: String) async throws -> RubidiumThreadDetail {
         guard let browser else { throw RubidiumAPIError(status: 0, message: "Rubidium is starting.", code: nil) }
-        let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let encoded = RubidiumURL.pathSegment(id)
         let response: RubidiumThreadResponse = try await browser.api("/api/threads/\(encoded)")
         activeThread = response.thread
         return response.thread
@@ -290,7 +290,7 @@ extension RubidiumNativeStore {
         let snapshot = threads
         applyOptimistic(action, id: thread.id)
         do {
-            let encoded = thread.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? thread.id
+            let encoded = RubidiumURL.pathSegment(thread.id)
             var body: [String: Any] = ["action": action.rawValue, "expectedVersion": thread.syncVersion]
             if let snoozedUntil { body["snoozedUntil"] = ISO8601DateFormatter().string(from: snoozedUntil) }
             let response: RubidiumThreadActionResponse = try await browser.api(
@@ -394,43 +394,73 @@ struct RubidiumMailAppShell: View {
     @State private var deepLinkedThread: RubidiumThreadSummary?
     @State private var deepLinkedEvent: RubidiumCalendarEvent?
     @State private var compactSidebarOpen = false
+    @State private var compactSettingsOpen = false
+    @State private var compactTab: RubidiumPrimaryTab = .mail
+    @State private var didApplyDebugLaunchState = false
+    @State private var debugCalendarComposerOpen = false
     @ObservedObject private var notifications = RubidiumNotifications.shared
 
     var body: some View {
         Group {
             if horizontalSizeClass == .compact {
-                ZStack(alignment: .leading) {
-                    destination(selection ?? .current, openMailboxes: openSidebar)
-                        .disabled(compactSidebarOpen)
+                TabView(selection: $compactTab) {
+                    Tab("Mail", systemImage: "tray.full", value: RubidiumPrimaryTab.mail) {
+                        destination(mailSelection, openMailboxes: openSidebar)
+                    }
 
-                    if compactSidebarOpen {
-                        Color.black.opacity(0.48)
-                            .ignoresSafeArea()
-                            .onTapGesture { closeSidebar() }
-                            .transition(.opacity)
+                    Tab("Today", systemImage: "calendar", value: RubidiumPrimaryTab.today) {
+                        RubidiumNativeCalendarView(store: store, browser: browser)
+                    }
 
-                        GeometryReader { geometry in
-                            HStack(spacing: 0) {
-                                RubidiumMailboxSidebar(
-                                    store: store,
-                                    selection: $selection,
-                                    compose: {
-                                        closeSidebar()
-                                        composeRequest = .new
-                                    },
-                                    didSelect: closeSidebar
-                                )
-                                .frame(width: min(geometry.size.width * 0.88, 370))
-                                .shadow(color: .black.opacity(0.45), radius: 30, x: 14)
-                                Spacer(minLength: 0)
-                            }
-                        }
-                        .ignoresSafeArea()
-                        .transition(.move(edge: .leading))
-                        .zIndex(2)
+                    Tab(
+                        "Search",
+                        systemImage: "sparkle.magnifyingglass",
+                        value: RubidiumPrimaryTab.search,
+                        role: .search
+                    ) {
+                        RubidiumNativeSearchView(
+                            store: store,
+                            openThread: { deepLinkedThread = $0 },
+                            openEvent: { deepLinkedEvent = $0 },
+                            showsDismissButton: false
+                        )
                     }
                 }
-                .animation(.smooth(duration: 0.28, extraBounce: 0.02), value: compactSidebarOpen)
+                .tabBarMinimizeBehavior(.onScrollDown)
+                .onChange(of: compactTab) { _, _ in
+                    RubidiumHaptics.shared.play(.selection)
+                }
+                .sheet(isPresented: $compactSidebarOpen) {
+                    RubidiumMailboxSidebar(
+                        store: store,
+                        selection: $selection,
+                        compose: {
+                            closeSidebar()
+                            composeRequest = .new
+                        },
+                        didSelect: closeSidebar,
+                        openAccounts: {
+                            closeSidebar()
+                            compactSettingsOpen = true
+                        },
+                        showsTopLevelDestinations: false
+                    )
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+                }
+                .sheet(isPresented: $compactSettingsOpen) {
+                    RubidiumNativeAccountsView(
+                        store: store,
+                        browser: browser,
+                        security: security,
+                        dismiss: { compactSettingsOpen = false }
+                    )
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+                }
+                .sheet(isPresented: $debugCalendarComposerOpen) {
+                    RubidiumCalendarComposer(store: store)
+                }
             } else {
                 NavigationSplitView(columnVisibility: $columnVisibility) {
                     RubidiumMailboxSidebar(
@@ -450,6 +480,7 @@ struct RubidiumMailAppShell: View {
             await store.loadMailboxes()
             await store.loadNotificationPreferences()
             openPendingNotification()
+            applyDebugLaunchStateIfNeeded()
         }
         .fullScreenCover(item: $composeRequest) { request in
             RubidiumMailComposer(store: store, request: request)
@@ -525,13 +556,65 @@ struct RubidiumMailAppShell: View {
         deepLinkedThread = thread
         notifications.pendingThreadId = nil
     }
+
+    private var mailSelection: RubidiumMailboxDestination {
+        guard let selection else { return .current }
+        switch selection.kind {
+        case .today, .search, .accounts:
+            return .current
+        default:
+            return selection
+        }
+    }
+
+    private func applyDebugLaunchStateIfNeeded() {
+#if DEBUG
+        guard !didApplyDebugLaunchState else { return }
+        didApplyDebugLaunchState = true
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--rubidium-audit-calendar") {
+            compactTab = .today
+        } else if arguments.contains("--rubidium-audit-search") {
+            compactTab = .search
+        } else if arguments.contains("--rubidium-audit-menu") {
+            compactSidebarOpen = true
+        } else if arguments.contains("--rubidium-audit-settings") {
+            compactSettingsOpen = true
+        } else if arguments.contains("--rubidium-audit-compose") {
+            composeRequest = .new
+        } else if arguments.contains("--rubidium-audit-new-event") {
+            compactTab = .today
+            debugCalendarComposerOpen = true
+        } else if arguments.contains("--rubidium-audit-event"), let event = store.events.first {
+            compactTab = .today
+            deepLinkedEvent = event
+        } else if arguments.contains("--rubidium-audit-reply"), let thread = store.threads.first {
+            Task {
+                guard let detail = try? await store.loadThread(thread.id),
+                      let message = detail.messages.last else { return }
+                composeRequest = .reply(detail, message)
+            }
+        } else if arguments.contains("--rubidium-audit-thread"), let thread = store.threads.first {
+            deepLinkedThread = thread
+        }
+#endif
+    }
+}
+
+private enum RubidiumPrimaryTab: Hashable {
+    case mail
+    case today
+    case search
 }
 
 private struct RubidiumMailboxSidebar: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject var store: RubidiumNativeStore
     @Binding var selection: RubidiumMailboxDestination?
     let compose: () -> Void
     var didSelect: () -> Void = {}
+    var openAccounts: (() -> Void)? = nil
+    var showsTopLevelDestinations = true
 
     private let main: [RubidiumMailboxDestination] = [
         .current,
@@ -560,15 +643,17 @@ private struct RubidiumMailboxSidebar: View {
                             Text("Rubidium")
                                 .font(.system(.title3, design: .serif, weight: .bold))
                                 .foregroundStyle(.white)
-                            Text("EVERY INBOX · ONE PLACE")
-                                .font(.caption2.weight(.bold))
-                                .tracking(1.15)
-                                .foregroundStyle(.white.opacity(0.48))
+                            if !dynamicTypeSize.isAccessibilitySize {
+                                Text("EVERY INBOX · ONE PLACE")
+                                    .font(.caption2.weight(.bold))
+                                    .tracking(1.15)
+                                    .foregroundStyle(.white.opacity(0.48))
+                            }
                         }
                         Spacer()
                         Button(action: didSelect) {
                             Image(systemName: "xmark")
-                                .font(.body.weight(.semibold))
+                                .font(.system(size: 18, weight: .semibold))
                                 .frame(width: 44, height: 44)
                         }
                         .foregroundStyle(.white.opacity(0.68))
@@ -598,32 +683,49 @@ private struct RubidiumMailboxSidebar: View {
                     .padding(.bottom, 28)
 
                     sidebarHeader("Your views")
-                    ForEach(main) { destination in row(destination) }
+                    ForEach(visibleMain) { destination in row(destination) }
 
                     sidebarHeader("Mailboxes")
                         .padding(.top, 22)
                     ForEach(folders) { destination in row(destination) }
 
                     ForEach(store.accounts) { account in
-                        sidebarHeader(account.displayName.isEmpty ? account.email : account.displayName)
-                            .padding(.top, 22)
                         let accountBoxes = store.mailboxes.filter { $0.accountId == account.id }
-                        ForEach(accountBoxes) { mailbox in
-                            row(.init(
-                                id: "provider:\(mailbox.id)",
-                                title: mailbox.name,
-                                symbol: mailboxSymbol(mailbox.kind),
-                                kind: .provider,
-                                accountId: account.id,
-                                providerView: mailbox.kind
-                            ), count: mailbox.unreadCount)
+                        if !accountBoxes.isEmpty {
+                            sidebarHeader(account.displayName.isEmpty ? account.email : account.displayName)
+                                .padding(.top, 22)
+                            ForEach(accountBoxes) { mailbox in
+                                row(.init(
+                                    id: "provider:\(mailbox.id)",
+                                    title: mailbox.name,
+                                    symbol: mailboxSymbol(mailbox.kind),
+                                    kind: .provider,
+                                    accountId: account.id,
+                                    providerView: mailbox.kind
+                                ), count: mailbox.unreadCount)
+                            }
                         }
                     }
 
                     sidebarHeader("Rubidium")
                         .padding(.top, 22)
-                    row(.init(id: "search", title: "Search", symbol: "sparkle.magnifyingglass", kind: .search))
-                    row(.init(id: "settings", title: "Accounts & Settings", symbol: "gearshape", kind: .accounts))
+                    if showsTopLevelDestinations {
+                        row(.init(id: "search", title: "Search", symbol: "sparkle.magnifyingglass", kind: .search))
+                    }
+                    if let openAccounts {
+                        Button(action: openAccounts) {
+                            sidebarRowLabel(
+                                title: "Accounts & Settings",
+                                symbol: "gearshape",
+                                selected: false,
+                                count: 0
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 8)
+                    } else {
+                        row(.init(id: "settings", title: "Accounts & Settings", symbol: "gearshape", kind: .accounts))
+                    }
                 }
                 .padding(.vertical, 12)
             }
@@ -647,49 +749,65 @@ private struct RubidiumMailboxSidebar: View {
             RubidiumHaptics.shared.play(.selection)
             didSelect()
         } label: {
-            HStack(spacing: 13) {
-                Image(systemName: destination.symbol)
-                    .symbolVariant(selection == destination ? .fill : .none)
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(selection == destination ? RubidiumTheme.accentSoft : .white.opacity(0.68))
-                    .frame(width: 24)
-                Text(destination.title)
-                    .font(.body.weight(selection == destination ? .semibold : .medium))
-                    .lineLimit(1)
-                Spacer(minLength: 12)
-                if count > 0 {
-                    Text(count, format: .number)
-                        .font(.caption.weight(.bold))
-                        .monospacedDigit()
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(
-                            selection == destination
-                                ? RubidiumTheme.accent
-                                : Color.white.opacity(0.12),
-                            in: Capsule()
-                        )
-                }
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .background {
-                if selection == destination {
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .fill(RubidiumTheme.sidebarSurface)
-                        .overlay(alignment: .leading) {
-                            Rectangle()
-                                .fill(RubidiumTheme.accent)
-                                .frame(width: 3)
-                                .padding(.vertical, 8)
-                        }
-                }
-            }
+            sidebarRowLabel(
+                title: destination.title,
+                symbol: destination.symbol,
+                selected: selection == destination,
+                count: count
+            )
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 8)
         .accessibilityAddTraits(selection == destination ? .isSelected : [])
+    }
+
+    private var visibleMain: [RubidiumMailboxDestination] {
+        showsTopLevelDestinations ? main : main.filter { $0.kind != .today }
+    }
+
+    private func sidebarRowLabel(
+        title: String,
+        symbol: String,
+        selected: Bool,
+        count: Int
+    ) -> some View {
+        HStack(spacing: 13) {
+            Image(systemName: symbol)
+                .symbolVariant(selected ? .fill : .none)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(selected ? RubidiumTheme.accentSoft : .white.opacity(0.68))
+                .frame(width: 28)
+            Text(title)
+                .font(.body.weight(selected ? .semibold : .medium))
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+            Spacer(minLength: 12)
+            if count > 0 {
+                Text(count, format: .number)
+                    .font(.caption.weight(.bold))
+                    .monospacedDigit()
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(
+                        selected ? RubidiumTheme.accent : Color.white.opacity(0.12),
+                        in: Capsule()
+                    )
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .background {
+            if selected {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(RubidiumTheme.sidebarSurface)
+                    .overlay(alignment: .leading) {
+                        Rectangle()
+                            .fill(RubidiumTheme.accent)
+                            .frame(width: 3)
+                            .padding(.vertical, 8)
+                    }
+            }
+        }
     }
 
     private func mailboxSymbol(_ kind: String) -> String {
@@ -816,9 +934,7 @@ private struct RubidiumMailboxView: View {
                         .listStyle(.plain)
                         .scrollContentBackground(.hidden)
                         .contentMargins(.top, 0, for: .scrollContent)
-                        .safeAreaInset(edge: .bottom) {
-                            Color.clear.frame(height: editMode == .active ? 76 : 64)
-                        }
+                        .contentMargins(.bottom, editMode == .active ? 80 : 60, for: .scrollContent)
                         .refreshable { await syncAndRefresh() }
                         .animation(.smooth(duration: 0.24), value: visibleThreads.map(\.id))
                     }
@@ -1161,6 +1277,7 @@ private struct RubidiumThreadDetailView: View {
     @State private var detail: RubidiumThreadDetail?
     @State private var error: String?
     @State private var expanded = Set<String>()
+    @State private var isScheduling = false
 
     var body: some View {
         ZStack {
@@ -1208,20 +1325,18 @@ private struct RubidiumThreadDetailView: View {
         .navigationTitle("Conversation")
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 7) {
-                Button { reply(all: false) } label: {
-                    Label("Reply", systemImage: "arrowshape.turn.up.left.fill")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 48)
-                        .background(RubidiumTheme.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .foregroundStyle(.white)
+            HStack(spacing: 6) {
+                responseButton("Reply", symbol: "arrowshape.turn.up.left.fill", emphasized: true) {
+                    reply(all: false)
                 }
-                .buttonStyle(.plain)
+                responseButton("Reply All", symbol: "arrowshape.turn.up.left.2") {
+                    reply(all: true)
+                }
+                responseButton("Forward", symbol: "arrowshape.turn.up.right") {
+                    forward()
+                }
 
                 Menu {
-                    Button("Reply All", systemImage: "arrowshape.turn.up.left.2") { reply(all: true) }
-                    Button("Forward", systemImage: "arrowshape.turn.up.right") { forward() }
-                    Divider()
                     Button(summary.flagged ? "Unflag" : "Flag", systemImage: "flag") { action(summary.flagged ? .unflag : .flag) }
                     Button("Mark Unread", systemImage: "envelope.badge") { action(.unread) }
                     Button("Archive", systemImage: "archivebox") { action(.archive) }
@@ -1230,9 +1345,9 @@ private struct RubidiumThreadDetailView: View {
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.body.weight(.bold))
-                        .frame(width: 50, height: 48)
+                        .frame(width: 44, height: 48)
                 }
-                .accessibilityLabel("Conversation actions")
+                .accessibilityLabel("More conversation actions")
             }
             .padding(6)
             .rubidiumGlass(cornerRadius: 20, interactive: true)
@@ -1246,6 +1361,21 @@ private struct RubidiumThreadDetailView: View {
                 expanded = Set(value.messages.suffix(1).map(\.id))
                 if summary.unread { _ = await store.perform(.read, on: summary) }
             } catch { self.error = error.localizedDescription }
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Schedule", systemImage: "calendar.badge.plus") {
+                    isScheduling = true
+                }
+                .accessibilityHint("Create a calendar event with this conversation's people")
+            }
+        }
+        .sheet(isPresented: $isScheduling) {
+            RubidiumCalendarComposer(
+                store: store,
+                prefillTitle: summary.subject,
+                prefillAttendees: scheduleAttendees
+            )
         }
     }
 
@@ -1267,6 +1397,39 @@ private struct RubidiumThreadDetailView: View {
 
     private func action(_ value: RubidiumMailAction) {
         Task { _ = await store.perform(value, on: summary) }
+    }
+
+    private var scheduleAttendees: [String] {
+        guard let message = detail?.messages.last else { return [] }
+        let ownAddresses = Set(store.accounts.map { $0.email.lowercased() })
+        return ([message.from] + message.to + message.cc)
+            .map(\.address)
+            .filter { !ownAddresses.contains($0.lowercased()) }
+            .uniqued()
+    }
+
+    private func responseButton(
+        _ title: String,
+        symbol: String,
+        emphasized: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            ViewThatFits(in: .horizontal) {
+                Label(title, systemImage: symbol)
+                    .font(.subheadline.weight(.semibold))
+                Image(systemName: symbol)
+                    .font(.body.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .background(
+                emphasized ? RubidiumTheme.accent : Color.clear,
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+            )
+            .foregroundStyle(emphasized ? Color.white : Color.primary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
     }
 }
 
@@ -1485,7 +1648,20 @@ private struct RubidiumMailBodyView: UIViewRepresentable {
         <!doctype html><html><head>
         <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: cid:; style-src 'unsafe-inline'">
-        <style>:root{color-scheme:light dark}*{box-sizing:border-box}html,body{margin:0;padding:0;background:transparent;color:CanvasText;font:-apple-system-body}img,video,table{max-width:100%!important;height:auto!important}table{display:block;overflow-x:auto}pre{white-space:pre-wrap;font:inherit;margin:0}blockquote{border-inline-start:3px solid GrayText;margin-inline:0;padding-inline-start:12px;color:GrayText}a{color:LinkText}</style>
+        <style>
+        :root{color-scheme:light dark}
+        *{box-sizing:border-box}
+        html,body{margin:0;padding:0;width:100%!important;max-width:100%!important;overflow-x:hidden;background:transparent;color:CanvasText;font:-apple-system-body;-webkit-text-size-adjust:100%}
+        body *{max-width:100%!important}
+        div,p,span,a,td,th{overflow-wrap:anywhere;word-break:break-word;white-space:normal!important}
+        img,video{max-width:100%!important;height:auto!important}
+        img[data-remote-src]:not([src]){display:none!important}
+        table{width:100%!important;max-width:100%!important;table-layout:auto;border-collapse:collapse}
+        td,th{min-width:0!important;width:auto!important}
+        pre{white-space:pre-wrap!important;font:inherit;margin:0}
+        blockquote{border-inline-start:3px solid GrayText;margin-inline:0;padding-inline-start:12px;color:GrayText}
+        a{color:LinkText}
+        </style>
         </head><body>\(prepared.html)</body></html>
         """
         if context.coordinator.lastPage != page {
@@ -1893,6 +2069,7 @@ struct RubidiumComposerPayload: Hashable, Codable {
     var references: [String]
     var replyMode: String?
     var sendAt: Date?
+    var quotedHistory: String? = nil
 
     var dictionary: [String: Any] {
         func addresses(_ values: [String]) -> [[String: String]] {
@@ -1928,6 +2105,8 @@ private struct RubidiumMailComposer: View {
     @State private var subject = ""
     @State private var richBody = AttributedString()
     @State private var textSelection = AttributedTextSelection()
+    @State private var quotedHistory: String?
+    @State private var quotedHistoryExpanded = false
     @State private var attachments: [RubidiumOutgoingAttachment] = []
     @State private var showDetails = false
     @State private var showFilePicker = false
@@ -1968,6 +2147,33 @@ private struct RubidiumMailComposer: View {
                         .frame(minHeight: 260)
                         .scrollDismissesKeyboard(.interactively)
                         .accessibilityLabel("Message")
+                        .overlay(alignment: .topLeading) {
+                            if plainBody.isEmpty {
+                                Text("Write a message…")
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.top, 8)
+                                    .padding(.leading, 5)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                }
+                if let quotedHistory {
+                    Section {
+                        DisclosureGroup("Quoted message", isExpanded: $quotedHistoryExpanded) {
+                            Text(quotedHistory)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .padding(.vertical, 6)
+
+                            Button("Remove quoted message", systemImage: "xmark.circle", role: .destructive) {
+                                self.quotedHistory = nil
+                                quotedHistoryExpanded = false
+                            }
+                        }
+                    } footer: {
+                        Text("The original conversation will be included below your response.")
+                    }
                 }
                 if !attachments.isEmpty {
                     Section("Attachments") {
@@ -1988,7 +2194,6 @@ private struct RubidiumMailComposer: View {
                 if sendLater {
                     Section("Send Later") { DatePicker("Delivery", selection: $sendDate, in: Date()...) }
                 }
-                if !deliveryLabel.isEmpty { Section { Label(deliveryLabel, systemImage: "paperplane") } }
             }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
@@ -2004,20 +2209,54 @@ private struct RubidiumMailComposer: View {
                     .disabled(!canSend || isSending)
                     .accessibilityLabel(sendLater ? "Schedule message" : "Send message")
                 }
-                ToolbarItemGroup(placement: .keyboard) {
-                    PhotosPicker(selection: $photos, maxSelectionCount: 20, matching: .any(of: [.images, .videos])) {
-                        Image(systemName: "photo")
-                    }
-                    Button { showFilePicker = true } label: { Image(systemName: "paperclip") }
-                    Button { applyFont(.bold) } label: { Image(systemName: "bold") }
-                    Button { applyFont(.italic) } label: { Image(systemName: "italic") }
-                    Button { applyUnderline() } label: { Image(systemName: "underline") }
+                ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button(sendLater ? "Send Now" : "Send Later", systemImage: "clock") { sendLater.toggle() }
-                    } label: { Image(systemName: "ellipsis.circle") }
-                    Button { showIntelligence = true } label: { Image(systemName: "sparkles") }
+                        Button(
+                            sendLater ? "Send Now" : "Send Later",
+                            systemImage: sendLater ? "paperplane" : "clock"
+                        ) {
+                            sendLater.toggle()
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                    }
+                    .accessibilityLabel("Delivery options")
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Menu {
+                        PhotosPicker(
+                            selection: $photos,
+                            maxSelectionCount: 20,
+                            matching: .any(of: [.images, .videos])
+                        ) {
+                            Label("Photo or Video", systemImage: "photo")
+                        }
+                        Button("Choose File", systemImage: "doc") {
+                            showFilePicker = true
+                        }
+                    } label: {
+                        Image(systemName: "paperclip")
+                    }
+                    .accessibilityLabel("Add attachment")
+
+                    Menu {
+                        Button("Bold", systemImage: "bold") { applyFont(.bold) }
+                        Button("Italic", systemImage: "italic") { applyFont(.italic) }
+                        Button("Underline", systemImage: "underline") { applyUnderline() }
+                    } label: {
+                        Image(systemName: "textformat")
+                    }
+                    .accessibilityLabel("Formatting")
+
+                    Button { showIntelligence = true } label: {
+                        Image(systemName: "sparkles")
+                    }
+                    .accessibilityLabel("Write with Rubidium")
                     Spacer()
-                    Button { focused = nil } label: { Image(systemName: "keyboard.chevron.compact.down") }
+                    Button { focused = nil } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                    }
+                    .accessibilityLabel("Hide keyboard")
                 }
             }
             .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
@@ -2055,7 +2294,7 @@ private struct RubidiumMailComposer: View {
             .task(id: autosaveKey) {
                 guard hasContent else { return }
                 try? await Task.sleep(for: .seconds(1.2))
-                RubidiumLocalCache.shared.save(payload, key: localDraftKey)
+                RubidiumLocalCache.shared.save(cachePayload, key: localDraftKey)
                 try? await saveDraft()
             }
         }
@@ -2066,9 +2305,26 @@ private struct RubidiumMailComposer: View {
     }
 
     private var plainBody: String { String(richBody.characters) }
-    private var hasContent: Bool { !to.isEmpty || !subject.isEmpty || !plainBody.isEmpty || !attachments.isEmpty }
-    private var canSend: Bool { !accountId.isEmpty && !parse(to).isEmpty && !plainBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    private var autosaveKey: String { "\(accountId)|\(to)|\(cc)|\(bcc)|\(subject)|\(plainBody.hashValue)|\(attachments.hashValue)" }
+    private var composedBody: String {
+        guard let quotedHistory else { return plainBody }
+        let separator = plainBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : "\n\n"
+        return plainBody + separator + quotedHistory
+    }
+    private var hasContent: Bool {
+        !to.isEmpty || !subject.isEmpty || !plainBody.isEmpty || quotedHistory != nil || !attachments.isEmpty
+    }
+    private var canSend: Bool {
+        let hasWritableBody = !plainBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || (isForward && quotedHistory != nil)
+        return !accountId.isEmpty && !parse(to).isEmpty && hasWritableBody
+    }
+    private var isForward: Bool {
+        if case .forward = request { return true }
+        return false
+    }
+    private var autosaveKey: String {
+        "\(accountId)|\(to)|\(cc)|\(bcc)|\(subject)|\(plainBody.hashValue)|\(quotedHistory?.hashValue ?? 0)|\(attachments.hashValue)"
+    }
     private var localDraftKey: String { "composer:\(request.id)" }
 
     private func recipientField(_ label: String, text: Binding<String>, field: Field) -> some View {
@@ -2088,7 +2344,9 @@ private struct RubidiumMailComposer: View {
             cc = cached.cc.joined(separator: ", ")
             bcc = cached.bcc.joined(separator: ", ")
             subject = cached.subject
-            richBody = AttributedString(cached.bodyText)
+            let restored = restoredDraft(cached)
+            richBody = AttributedString(restored.body)
+            quotedHistory = restored.quote
             attachments = cached.attachments
             if let date = cached.sendAt { sendLater = true; sendDate = date }
             focused = .body
@@ -2102,7 +2360,7 @@ private struct RubidiumMailComposer: View {
             accountId = thread.accountId
             to = (message.headers.replyTo.first ?? message.from).address
             subject = normalized("Re:", message.subject)
-            richBody = AttributedString("\n\nOn \(message.receivedAt), \(message.from.name) wrote:\n> \(message.bodyText.replacingOccurrences(of: "\n", with: "\n> "))")
+            quotedHistory = quote(for: message)
             focused = .body
         case .replyAll(let thread, let message):
             accountId = thread.accountId
@@ -2110,14 +2368,46 @@ private struct RubidiumMailComposer: View {
             let values = [message.from] + message.to + message.cc
             to = values.map(\.address).filter { !own.contains($0.lowercased()) }.uniqued().joined(separator: ", ")
             subject = normalized("Re:", message.subject)
-            richBody = AttributedString("\n\nOn \(message.receivedAt), \(message.from.name) wrote:\n> \(message.bodyText.replacingOccurrences(of: "\n", with: "\n> "))")
+            quotedHistory = quote(for: message)
             focused = .body
         case .forward(let thread, let message):
             accountId = thread.accountId
             subject = normalized("Fwd:", message.subject)
-            richBody = AttributedString("\n\n---------- Forwarded message ----------\nFrom: \(message.from.address)\nDate: \(message.receivedAt)\nSubject: \(message.subject)\n\n\(message.bodyText)")
+            quotedHistory = "---------- Forwarded message ----------\nFrom: \(message.from.address)\nDate: \(displayDate(message.receivedAt))\nSubject: \(message.subject)\n\n\(message.bodyText)"
             focused = .to
         }
+    }
+
+    private func quote(for message: RubidiumMailMessage) -> String {
+        let sender = message.from.name.isEmpty ? message.from.address : message.from.name
+        return "On \(displayDate(message.receivedAt)), \(sender) wrote:\n> \(message.bodyText.replacingOccurrences(of: "\n", with: "\n> "))"
+    }
+
+    private func displayDate(_ value: String) -> String {
+        guard let date = RubidiumDate.parse(value) else { return value }
+        return date.formatted(.dateTime.weekday(.wide).month(.wide).day().year().hour().minute())
+    }
+
+    private func restoredDraft(_ cached: RubidiumComposerPayload) -> (body: String, quote: String?) {
+        if let quote = cached.quotedHistory {
+            return (cached.bodyText, quote)
+        }
+
+        let markers = ["\n\nOn ", "\n\n---------- Forwarded message ----------"]
+        for marker in markers {
+            if let range = cached.bodyText.range(of: marker) {
+                return (
+                    String(cached.bodyText[..<range.lowerBound]),
+                    String(cached.bodyText[range.upperBound...]).isEmpty
+                        ? nil
+                        : String(cached.bodyText[range.lowerBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            }
+        }
+        if cached.bodyText.hasPrefix("On ") || cached.bodyText.hasPrefix("---------- Forwarded message ----------") {
+            return ("", cached.bodyText)
+        }
+        return (cached.bodyText, nil)
     }
 
     private func prepareForwardAttachments() async {
@@ -2158,14 +2448,39 @@ private struct RubidiumMailComposer: View {
         return .init(
             accountId: accountId,
             to: parse(to), cc: parse(cc), bcc: parse(bcc),
-            subject: subject, bodyText: plainBody, bodyHtml: htmlBody,
+            subject: subject, bodyText: composedBody, bodyHtml: htmlBody,
             attachments: attachments, threadId: context.0,
             replyToMessageId: context.2, inReplyTo: context.3, references: context.4,
             replyMode: context.1, sendAt: sendLater ? sendDate : nil
         )
     }
 
+    private var cachePayload: RubidiumComposerPayload {
+        var cached = payload
+        cached.bodyText = plainBody
+        cached.bodyHtml = attributedHTML
+        cached.quotedHistory = quotedHistory
+        return cached
+    }
+
     private var htmlBody: String? {
+        guard var html = attributedHTML else { return nil }
+        guard let quotedHistory else { return html }
+        let escapedQuote = quotedHistory
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\n", with: "<br>")
+        let quoteHTML = "<blockquote style=\"margin:16px 0 0;padding-left:12px;border-left:2px solid #999;color:#666\">\(escapedQuote)</blockquote>"
+        if let closingBody = html.range(of: "</body>", options: [.backwards, .caseInsensitive]) {
+            html.insert(contentsOf: quoteHTML, at: closingBody.lowerBound)
+        } else {
+            html.append(quoteHTML)
+        }
+        return html
+    }
+
+    private var attributedHTML: String? {
         let attributed = NSAttributedString(richBody)
         guard let data = try? attributed.data(
             from: NSRange(location: 0, length: attributed.length),
@@ -2189,7 +2504,7 @@ private struct RubidiumMailComposer: View {
     }
 
     private func saveDraft() async throws {
-        RubidiumLocalCache.shared.save(payload, key: localDraftKey)
+        RubidiumLocalCache.shared.save(cachePayload, key: localDraftKey)
         draftId = try await store.saveDraft(payload, id: draftId)
         deliveryLabel = "Draft saved"
     }
