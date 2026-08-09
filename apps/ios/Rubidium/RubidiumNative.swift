@@ -429,19 +429,23 @@ private struct RubidiumNativeNavigationBar: View {
 }
 
 struct RubidiumNativeSearchView: View {
+    @Environment(\.dismiss) private var dismiss
     @ObservedObject var store: RubidiumNativeStore
     let openThread: (RubidiumThreadSummary) -> Void
     let openEvent: (RubidiumCalendarEvent) -> Void
+    let openMailboxes: (() -> Void)?
     @State private var query = ""
 
     init(
         store: RubidiumNativeStore,
         openThread: @escaping (RubidiumThreadSummary) -> Void,
-        openEvent: @escaping (RubidiumCalendarEvent) -> Void = { _ in }
+        openEvent: @escaping (RubidiumCalendarEvent) -> Void = { _ in },
+        openMailboxes: (() -> Void)? = nil
     ) {
         self.store = store
         self.openThread = openThread
         self.openEvent = openEvent
+        self.openMailboxes = openMailboxes
     }
 
     private var matchingThreads: [RubidiumThreadSummary] {
@@ -505,8 +509,10 @@ struct RubidiumNativeSearchView: View {
                         }
                     }
                     .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
             }
+            .background(RubidiumTheme.canvas.ignoresSafeArea())
             .navigationTitle("Search")
             .searchable(
                 text: $query,
@@ -514,6 +520,19 @@ struct RubidiumNativeSearchView: View {
                 prompt: "Mail and calendar"
             )
             .textInputAutocapitalization(.never)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if let openMailboxes {
+                        Button(action: openMailboxes) {
+                            RubidiumBrandMark(size: 30, cornerRadius: 9)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Open mailboxes")
+                    } else {
+                        Button("Close", systemImage: "xmark") { dismiss() }
+                    }
+                }
+            }
             .task(id: query) {
                 guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     store.searchThreads = []
@@ -529,62 +548,115 @@ struct RubidiumNativeSearchView: View {
 
 struct RubidiumThreadRow: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.colorScheme) private var colorScheme
     let thread: RubidiumThreadSummary
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Circle()
-                .fill(thread.provider == "google" ? Color.red.opacity(0.14) : Color.blue.opacity(0.14))
-                .frame(width: 42, height: 42)
-                .overlay {
-                    Text(dynamicTypeSize.isAccessibilitySize ? String(initials.prefix(1)) : initials)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .dynamicTypeSize(.small ... .large)
-                        .lineLimit(1)
-                }
-
-            VStack(alignment: .leading, spacing: 3) {
-                if dynamicTypeSize.isAccessibilitySize {
-                    Text(thread.displayName.isEmpty ? thread.email : thread.displayName)
-                        .font(.subheadline.weight(thread.unread ? .bold : .semibold))
-                        .lineLimit(2)
-                    Text(RubidiumDate.short(thread.lastMessageAt))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    HStack {
-                        Text(thread.displayName.isEmpty ? thread.email : thread.displayName)
-                            .font(.subheadline.weight(thread.unread ? .bold : .semibold))
+        HStack(spacing: 0) {
+            if thread.unread {
+                Rectangle()
+                    .fill(RubidiumTheme.accent)
+                    .frame(width: 3)
+                    .padding(.vertical, 9)
+            }
+            HStack(alignment: .top, spacing: 12) {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(avatarColor)
+                    .frame(width: 46, height: 46)
+                    .overlay {
+                        Text(dynamicTypeSize.isAccessibilitySize ? String(initials.prefix(1)) : initials)
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(colorScheme == .dark ? .white.opacity(0.86) : .black.opacity(0.72))
+                            .dynamicTypeSize(.small ... .large)
                             .lineLimit(1)
-                        Spacer(minLength: 8)
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: thread.provider == "google" ? "envelope.fill" : "square.grid.2x2.fill")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 17, height: 17)
+                            .background(thread.provider == "google" ? RubidiumTheme.accent : Color.blue, in: Circle())
+                            .overlay { Circle().stroke(RubidiumTheme.canvas, lineWidth: 2) }
+                            .offset(x: 3, y: 3)
+                    }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    if dynamicTypeSize.isAccessibilitySize {
+                        Text(senderName)
+                            .font(.body.weight(thread.unread ? .bold : .semibold))
+                            .fixedSize(horizontal: false, vertical: true)
                         Text(RubidiumDate.short(thread.lastMessageAt))
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    } else {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(senderName)
+                                .font(.body.weight(thread.unread ? .bold : .semibold))
+                                .lineLimit(1)
+                            Spacer(minLength: 8)
+                            Text(RubidiumDate.short(thread.lastMessageAt))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
                     }
+                    Text(thread.subject.isEmpty ? "No subject" : thread.subject)
+                        .font(.subheadline.weight(thread.unread ? .semibold : .medium))
+                        .foregroundStyle(.primary.opacity(thread.unread ? 1 : 0.9))
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                    Text(thread.snippet)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
                 }
-                Text(thread.subject)
-                    .font(.subheadline.weight(thread.unread ? .semibold : .regular))
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
-                Text(thread.snippet)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
         }
-        .padding(.vertical, 4)
+        .background(thread.unread ? RubidiumTheme.elevated.opacity(0.5) : Color.clear)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(RubidiumTheme.rule)
+                .frame(height: 0.5)
+                .padding(.leading, thread.unread ? 75 : 72)
+        }
         .contentShape(Rectangle())
+    }
+
+    private var senderName: String {
+        thread.displayName.isEmpty ? thread.email : thread.displayName
     }
 
     private var initials: String {
         let value = thread.displayName.isEmpty ? thread.email : thread.displayName
         return value.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased()
     }
+
+    private var avatarColor: Color {
+        let palette: [Color] = colorScheme == .dark
+            ? [
+                Color(red: 0.18, green: 0.24, blue: 0.34),
+                Color(red: 0.31, green: 0.20, blue: 0.28),
+                Color(red: 0.19, green: 0.29, blue: 0.23),
+                Color(red: 0.35, green: 0.25, blue: 0.16),
+                Color(red: 0.25, green: 0.21, blue: 0.37),
+            ]
+            : [
+                Color(red: 0.79, green: 0.87, blue: 0.97),
+                Color(red: 0.94, green: 0.79, blue: 0.88),
+                Color(red: 0.79, green: 0.91, blue: 0.76),
+                Color(red: 0.97, green: 0.85, blue: 0.65),
+                Color(red: 0.84, green: 0.79, blue: 0.96),
+            ]
+        let index = senderName.unicodeScalars.reduce(0) { $0 + Int($1.value) } % palette.count
+        return palette[index]
+    }
 }
 
 struct RubidiumNativeCalendarView: View {
     @ObservedObject var store: RubidiumNativeStore
     @ObservedObject var browser: RubidiumBrowserModel
+    var openMailboxes: (() -> Void)? = nil
     @State private var isCreatingEvent = false
 
     private var groupedEvents: [(String, [RubidiumCalendarEvent])] {
@@ -637,23 +709,41 @@ struct RubidiumNativeCalendarView: View {
                         }
                     }
                     .listStyle(.insetGrouped)
+                    .scrollContentBackground(.hidden)
                     .refreshable { await store.syncCalendar() }
                 }
             }
+            .background(RubidiumTheme.canvas.ignoresSafeArea())
             .navigationTitle("Today")
             .task {
                 await store.prepareCalendar()
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        isCreatingEvent = true
-                    } label: {
-                        Image(systemName: "plus")
+                    if let openMailboxes {
+                        Button(action: openMailboxes) {
+                            RubidiumBrandMark(size: 30, cornerRadius: 9)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Open mailboxes")
+                    } else {
+                        Button {
+                            isCreatingEvent = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .accessibilityLabel("New event")
                     }
-                    .accessibilityLabel("New event")
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if openMailboxes != nil {
+                        Button {
+                            isCreatingEvent = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .accessibilityLabel("New event")
+                    }
                     Button {
                         RubidiumHaptics.shared.play(.action)
                         Task { await store.syncCalendar() }
@@ -975,6 +1065,7 @@ struct RubidiumNativeAccountsView: View {
     @ObservedObject var store: RubidiumNativeStore
     @ObservedObject var browser: RubidiumBrowserModel
     @ObservedObject var security: RubidiumAppLockModel
+    var openMailboxes: (() -> Void)? = nil
     @ObservedObject private var notifications = RubidiumNotifications.shared
     @AppStorage(RubidiumAppearance.storageKey) private var appearanceRaw = RubidiumAppearance.system.rawValue
 
@@ -1084,9 +1175,20 @@ struct RubidiumNativeAccountsView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(RubidiumTheme.canvas.ignoresSafeArea())
             .navigationTitle("Settings")
             .refreshable { await store.reloadAfterConnection() }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if let openMailboxes {
+                        Button(action: openMailboxes) {
+                            RubidiumBrandMark(size: 30, cornerRadius: 9)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Open mailboxes")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Sign out", role: .destructive) {
                         RubidiumHaptics.shared.play(.destructive)
