@@ -401,6 +401,9 @@ struct RubidiumThreadRow: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.colorScheme) private var colorScheme
     let thread: RubidiumThreadSummary
+    var selectionState: Bool? = nil
+    var primaryAction: (() -> Void)? = nil
+    var selectionAction: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 0) {
@@ -411,55 +414,8 @@ struct RubidiumThreadRow: View {
                     .padding(.vertical, 9)
             }
             HStack(alignment: .top, spacing: 12) {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .fill(avatarColor)
-                    .frame(width: 46, height: 46)
-                    .overlay {
-                        Text(dynamicTypeSize.isAccessibilitySize ? String(initials.prefix(1)) : initials)
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(colorScheme == .dark ? .white.opacity(0.86) : .black.opacity(0.72))
-                            .dynamicTypeSize(.small ... .large)
-                            .lineLimit(1)
-                    }
-                    .overlay(alignment: .bottomTrailing) {
-                        Image(systemName: thread.provider == "google" ? "envelope.fill" : "square.grid.2x2.fill")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 17, height: 17)
-                            .background(thread.provider == "google" ? RubidiumTheme.accent : Color.blue, in: Circle())
-                            .overlay { Circle().stroke(RubidiumTheme.canvas, lineWidth: 2) }
-                            .offset(x: 3, y: 3)
-                    }
-
-                VStack(alignment: .leading, spacing: 3) {
-                    if dynamicTypeSize.isAccessibilitySize {
-                        Text(senderName)
-                            .font(.body.weight(thread.unread ? .bold : .semibold))
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text(RubidiumDate.short(thread.lastMessageAt))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(senderName)
-                                .font(.body.weight(thread.unread ? .bold : .semibold))
-                                .lineLimit(1)
-                            Spacer(minLength: 8)
-                            Text(RubidiumDate.short(thread.lastMessageAt))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
-                        }
-                    }
-                    Text(thread.subject.isEmpty ? "No subject" : thread.subject)
-                        .font(.subheadline.weight(thread.unread ? .semibold : .medium))
-                        .foregroundStyle(.primary.opacity(thread.unread ? 1 : 0.9))
-                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-                    Text(thread.snippet)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
-                }
+                avatarControl
+                contentControl
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 11)
@@ -472,6 +428,127 @@ struct RubidiumThreadRow: View {
                 .padding(.leading, thread.unread ? 75 : 72)
         }
         .contentShape(Rectangle())
+        .onLongPressGesture(minimumDuration: 0.42, maximumDistance: 12) {
+            guard selectionState == nil else { return }
+            selectionAction?()
+        }
+        .animation(.smooth(duration: 0.2), value: selectionState)
+    }
+
+    @ViewBuilder
+    private var avatarControl: some View {
+        if let selectionAction {
+            Button(action: selectionAction) {
+                avatar
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(selectionAccessibilityLabel)
+            .accessibilityHint(selectionState == nil ? "Enters message selection" : "Toggles this conversation")
+        } else {
+            avatar
+        }
+    }
+
+    @ViewBuilder
+    private var contentControl: some View {
+        if let primaryAction {
+            Button(action: primaryAction) {
+                content
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(primaryAccessibilityLabel)
+        } else {
+            content
+        }
+    }
+
+    private var avatar: some View {
+        RoundedRectangle(cornerRadius: 13, style: .continuous)
+            .fill(avatarFill)
+            .frame(width: 46, height: 46)
+            .overlay {
+                if let selected = selectionState {
+                    Image(systemName: selected ? "checkmark" : "circle")
+                        .font(.system(size: selected ? 19 : 20, weight: .bold))
+                        .foregroundStyle(selected ? Color.white : Color.secondary)
+                        .contentTransition(.symbolEffect(.replace))
+                } else {
+                    Text(dynamicTypeSize.isAccessibilitySize ? String(initials.prefix(1)) : initials)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(colorScheme == .dark ? .white.opacity(0.86) : .black.opacity(0.72))
+                        .dynamicTypeSize(.small ... .large)
+                        .lineLimit(1)
+                }
+            }
+            .overlay {
+                if selectionState != nil {
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .stroke(selectionState == true ? RubidiumTheme.accent : Color.secondary.opacity(0.45), lineWidth: 1.25)
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if selectionState == nil {
+                    Image(systemName: thread.provider == "google" ? "envelope.fill" : "square.grid.2x2.fill")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 17, height: 17)
+                        .background(thread.provider == "google" ? RubidiumTheme.accent : Color.blue, in: Circle())
+                        .overlay { Circle().stroke(RubidiumTheme.canvas, lineWidth: 2) }
+                        .offset(x: 3, y: 3)
+                }
+            }
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if dynamicTypeSize.isAccessibilitySize {
+                Text(senderName)
+                    .font(.body.weight(thread.unread ? .bold : .semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(RubidiumDate.short(thread.lastMessageAt))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(senderName)
+                        .font(.body.weight(thread.unread ? .bold : .semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text(RubidiumDate.short(thread.lastMessageAt))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+            Text(thread.subject.isEmpty ? "No subject" : thread.subject)
+                .font(.subheadline.weight(thread.unread ? .semibold : .medium))
+                .foregroundStyle(.primary.opacity(thread.unread ? 1 : 0.9))
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+            Text(thread.snippet)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
+        }
+    }
+
+    private var avatarFill: Color {
+        guard let selected = selectionState else { return avatarColor }
+        return selected ? RubidiumTheme.accent : RubidiumTheme.elevated
+    }
+
+    private var selectionAccessibilityLabel: String {
+        if let selected = selectionState {
+            return "\(selected ? "Deselect" : "Select") \(senderName), \(thread.subject)"
+        }
+        return "Select \(senderName), \(thread.subject)"
+    }
+
+    private var primaryAccessibilityLabel: String {
+        if let selected = selectionState {
+            return "\(selected ? "Deselect" : "Select") \(senderName), \(thread.subject)"
+        }
+        return "Open \(senderName), \(thread.subject)"
     }
 
     private var senderName: String {

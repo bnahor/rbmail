@@ -120,6 +120,7 @@ private struct RubidiumMailboxesResponse: Decodable { let mailboxes: [RubidiumMa
 private struct RubidiumThreadResponse: Decodable { let thread: RubidiumThreadDetail }
 private struct RubidiumThreadActionResponse: Decodable { let ok: Bool; let thread: RubidiumThreadDetail? }
 private struct RubidiumSendResponse: Decodable { let sent: Bool?; let queued: Bool?; let draftId: String? }
+private struct RubidiumRecipientSuggestionsResponse: Decodable { let suggestions: [RubidiumMailAddress] }
 private struct RubidiumDraftEnvelope: Decodable {
     struct Value: Decodable { let id: String }
     let draft: Value
@@ -159,6 +160,21 @@ extension RubidiumNativeStore {
         } catch {
             mailActionError = error.localizedDescription
         }
+    }
+
+    func loadRecipientSuggestions(query: String = "", limit: Int = 50) async -> [RubidiumMailAddress] {
+        guard let browser else { return [] }
+        var components = URLComponents()
+        components.path = "/api/recipient-suggestions"
+        components.queryItems = [
+            URLQueryItem(name: "limit", value: String(max(1, min(limit, 100))))
+        ]
+        if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            components.queryItems?.append(URLQueryItem(name: "q", value: query))
+        }
+        let path = components.string ?? "/api/recipient-suggestions?limit=50"
+        let response: RubidiumRecipientSuggestionsResponse? = try? await browser.api(path)
+        return response?.suggestions ?? []
     }
 
     func updateNotificationPreferences(_ preferences: RubidiumNotificationPreferences) async {
@@ -887,9 +903,12 @@ private struct RubidiumMailboxView: View {
                         count: visibleThreads.count,
                         filter: $filter,
                         selecting: editMode == .active,
+                        selectionCount: selected.count,
+                        allSelected: !visibleThreads.isEmpty && selected.count == visibleThreads.count,
                         openMailboxes: openMailboxes,
                         openSearch: { showSearch = true },
                         compose: { composeRequest = .new },
+                        toggleSelectAll: toggleSelectAll,
                         toggleSelection: toggleSelection
                     )
 
@@ -906,50 +925,58 @@ private struct RubidiumMailboxView: View {
                         )
                         Spacer()
                     } else {
-                        List(selection: $selected) {
+                        List {
                             ForEach(threadGroups) { group in
                                 Section {
                                     ForEach(group.threads) { thread in
-                                        Button {
-                                            if editMode == .active {
-                                                if selected.contains(thread.id) {
-                                                    selected.remove(thread.id)
+                                        RubidiumThreadRow(
+                                            thread: thread,
+                                            selectionState: editMode == .active ? selected.contains(thread.id) : nil,
+                                            primaryAction: {
+                                                if editMode == .active {
+                                                    toggleSelected(thread)
                                                 } else {
-                                                    selected.insert(thread.id)
+                                                    navigationPath.append(thread)
                                                 }
-                                            } else {
-                                                navigationPath.append(thread)
+                                            },
+                                            selectionAction: {
+                                                if editMode == .active {
+                                                    toggleSelected(thread)
+                                                } else {
+                                                    beginSelection(with: thread)
+                                                }
                                             }
-                                        } label: {
-                                            RubidiumThreadRow(thread: thread)
-                                        }
-                                        .buttonStyle(.plain)
+                                        )
                                         .accessibilityAddTraits(selected.contains(thread.id) ? .isSelected : [])
                                         .listRowInsets(EdgeInsets())
                                         .listRowBackground(Color.clear)
                                         .listRowSeparator(.hidden)
-                                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                            Button {
-                                                Task { _ = await store.perform(thread.unread ? .read : .unread, on: thread) }
-                                            } label: {
-                                                Label(thread.unread ? "Read" : "Unread", systemImage: thread.unread ? "envelope.open" : "envelope.badge")
+                                        .swipeActions(edge: .leading, allowsFullSwipe: editMode != .active) {
+                                            if editMode != .active {
+                                                Button {
+                                                    Task { _ = await store.perform(thread.unread ? .read : .unread, on: thread) }
+                                                } label: {
+                                                    Label(thread.unread ? "Read" : "Unread", systemImage: thread.unread ? "envelope.open" : "envelope.badge")
+                                                }
+                                                .tint(.blue)
+                                                Button {
+                                                    Task { _ = await store.perform(thread.flagged ? .unflag : .flag, on: thread) }
+                                                } label: {
+                                                    Label(thread.flagged ? "Unflag" : "Flag", systemImage: thread.flagged ? "flag.slash" : "flag")
+                                                }
+                                                .tint(.orange)
                                             }
-                                            .tint(.blue)
-                                            Button {
-                                                Task { _ = await store.perform(thread.flagged ? .unflag : .flag, on: thread) }
-                                            } label: {
-                                                Label(thread.flagged ? "Unflag" : "Flag", systemImage: thread.flagged ? "flag.slash" : "flag")
-                                            }
-                                            .tint(.orange)
                                         }
-                                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                            Button {
-                                                Task { _ = await store.perform(.archive, on: thread) }
-                                            } label: { Label("Archive", systemImage: "archivebox") }
-                                            .tint(.green)
-                                            Button(role: .destructive) {
-                                                Task { _ = await store.perform(.trash, on: thread) }
-                                            } label: { Label("Trash", systemImage: "trash") }
+                                        .swipeActions(edge: .trailing, allowsFullSwipe: editMode != .active) {
+                                            if editMode != .active {
+                                                Button {
+                                                    Task { _ = await store.perform(.archive, on: thread) }
+                                                } label: { Label("Archive", systemImage: "archivebox") }
+                                                .tint(.green)
+                                                Button(role: .destructive) {
+                                                    Task { _ = await store.perform(.trash, on: thread) }
+                                                } label: { Label("Trash", systemImage: "trash") }
+                                            }
                                         }
                                     }
                                 } header: {
@@ -1006,7 +1033,6 @@ private struct RubidiumMailboxView: View {
                     .transition(.scale.combined(with: .opacity))
                 }
             }
-            .environment(\.editMode, $editMode)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: RubidiumThreadSummary.self) { thread in
                 RubidiumThreadDetailView(store: store, summary: thread, composeRequest: $composeRequest)
@@ -1031,6 +1057,12 @@ private struct RubidiumMailboxView: View {
                 }
 #endif
                 await refresh()
+#if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("--rubidium-audit-selection") {
+                    editMode = .active
+                    selected = Set(visibleThreads.prefix(3).map(\.id))
+                }
+#endif
             }
             .onChange(of: destination.id) { _, _ in
                 navigationPath = NavigationPath()
@@ -1098,6 +1130,36 @@ private struct RubidiumMailboxView: View {
         }
     }
 
+    private func beginSelection(with thread: RubidiumThreadSummary) {
+        withAnimation(.smooth(duration: 0.22)) {
+            editMode = .active
+            selected = [thread.id]
+        }
+        RubidiumHaptics.shared.play(.selection)
+    }
+
+    private func toggleSelected(_ thread: RubidiumThreadSummary) {
+        withAnimation(.smooth(duration: 0.16)) {
+            if selected.contains(thread.id) {
+                selected.remove(thread.id)
+            } else {
+                selected.insert(thread.id)
+            }
+        }
+        RubidiumHaptics.shared.play(.selection)
+    }
+
+    private func toggleSelectAll() {
+        withAnimation(.smooth(duration: 0.2)) {
+            if !visibleThreads.isEmpty && selected.count == visibleThreads.count {
+                selected.removeAll()
+            } else {
+                selected = Set(visibleThreads.map(\.id))
+            }
+        }
+        RubidiumHaptics.shared.play(.selection)
+    }
+
     private var emptyDescription: String {
         switch filter {
         case .all: "New messages will appear here."
@@ -1151,9 +1213,12 @@ private struct RubidiumInboxHeader: View {
     let count: Int
     @Binding var filter: RubidiumThreadFilter
     let selecting: Bool
+    let selectionCount: Int
+    let allSelected: Bool
     let openMailboxes: () -> Void
     let openSearch: () -> Void
     let compose: () -> Void
+    let toggleSelectAll: () -> Void
     let toggleSelection: () -> Void
 
     var body: some View {
@@ -1205,10 +1270,10 @@ private struct RubidiumInboxHeader: View {
             .accessibilityHint("Search mail and calendar with natural language")
 
             HStack(spacing: 7) {
-                Text(count, format: .number)
+                Text(selecting ? selectionCount : count, format: .number)
                     .monospacedDigit()
-                Text(count == 1 ? "conversation" : "conversations")
-                if filter != .all {
+                Text(selecting ? "selected" : (count == 1 ? "conversation" : "conversations"))
+                if !selecting && filter != .all {
                     Text("·")
                     Label(filter.title, systemImage: filter.symbol)
                         .labelStyle(.titleOnly)
@@ -1264,30 +1329,44 @@ private struct RubidiumInboxHeader: View {
 
     private var actionButtons: some View {
         HStack(spacing: 5) {
-            Menu {
-                Picker("Show", selection: $filter) {
-                    ForEach(RubidiumThreadFilter.allCases) { option in
-                        Label(option.title, systemImage: option.symbol)
-                            .tag(option)
+            if selecting {
+                Button(action: toggleSelectAll) {
+                    Image(systemName: allSelected ? "checkmark.circle.fill" : "checklist")
+                        .frame(width: 42, height: 42)
+                }
+                .accessibilityLabel(allSelected ? "Deselect all conversations" : "Select all visible conversations")
+
+                Button(action: toggleSelection) {
+                    Image(systemName: "xmark")
+                        .frame(width: 42, height: 42)
+                }
+                .accessibilityLabel("Finish selecting")
+            } else {
+                Menu {
+                    Picker("Show", selection: $filter) {
+                        ForEach(RubidiumThreadFilter.allCases) { option in
+                            Label(option.title, systemImage: option.symbol)
+                                .tag(option)
+                        }
                     }
+
+                    Divider()
+
+                    Button("Select messages", systemImage: "checkmark.circle") {
+                        toggleSelection()
+                    }
+                } label: {
+                    Image(systemName: filter == .all ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
+                        .frame(width: 42, height: 42)
                 }
+                .accessibilityLabel(filter == .all ? "Filter and select" : "Filtered by \(filter.title)")
 
-                Divider()
-
-                Button(selecting ? "Done selecting" : "Select messages", systemImage: selecting ? "checkmark" : "checkmark.circle") {
-                    toggleSelection()
+                Button(action: compose) {
+                    Image(systemName: "square.and.pencil")
+                        .frame(width: 42, height: 42)
                 }
-            } label: {
-                Image(systemName: filter == .all ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
-                    .frame(width: 42, height: 42)
+                .accessibilityLabel("New message")
             }
-            .accessibilityLabel(filter == .all ? "Filter and select" : "Filtered by \(filter.title)")
-
-            Button(action: compose) {
-                Image(systemName: "square.and.pencil")
-                    .frame(width: 42, height: 42)
-            }
-            .accessibilityLabel("New message")
         }
         .font(.body.weight(.semibold))
         .foregroundStyle(.primary)
@@ -2174,6 +2253,7 @@ private struct RubidiumMailComposer: View {
     @State private var to = ""
     @State private var cc = ""
     @State private var bcc = ""
+    @State private var mailboxRecipients: [RubidiumMailAddress] = []
     @State private var subject = ""
     @State private var richBody = AttributedString()
     @State private var textSelection = AttributedTextSelection()
@@ -2371,6 +2451,21 @@ private struct RubidiumMailComposer: View {
                 configure()
                 await prepareForwardAttachments()
             }
+            .task {
+                mailboxRecipients = mergeRecipients(
+                    await store.loadRecipientSuggestions(limit: 60),
+                    mailboxRecipients
+                )
+            }
+            .task(id: recipientLookupKey) {
+                let query = recipientLookupQuery
+                guard query.count >= 2 else { return }
+                try? await Task.sleep(for: .milliseconds(240))
+                guard !Task.isCancelled else { return }
+                let matches = await store.loadRecipientSuggestions(query: query, limit: 30)
+                guard !Task.isCancelled else { return }
+                mailboxRecipients = mergeRecipients(matches, mailboxRecipients)
+            }
             .task(id: autosaveKey) {
                 guard hasContent else { return }
                 try? await Task.sleep(for: .seconds(1.2))
@@ -2412,13 +2507,43 @@ private struct RubidiumMailComposer: View {
         let activeParticipants = store.activeThread?.participants ?? []
         var seen = Set<String>()
 
-        return (activeParticipants + store.threads.flatMap(\.participants)).compactMap { participant in
+        return (mailboxRecipients + activeParticipants + store.threads.flatMap(\.participants)).compactMap { participant in
             let address = participant.address.trimmingCharacters(in: .whitespacesAndNewlines)
             let key = address.lowercased()
             guard address.contains("@"), !ownAddresses.contains(key), seen.insert(key).inserted else {
                 return nil
             }
             return RubidiumRecipientSuggestion(name: participant.name, address: address)
+        }
+    }
+
+    private var recipientLookupQuery: String {
+        switch focused {
+        case .to: currentRecipientToken(in: to)
+        case .cc: currentRecipientToken(in: cc)
+        case .bcc: currentRecipientToken(in: bcc)
+        default: ""
+        }
+    }
+
+    private var recipientLookupKey: String {
+        let field: String
+        switch focused {
+        case .to: field = "to"
+        case .cc: field = "cc"
+        case .bcc: field = "bcc"
+        default: field = "none"
+        }
+        return "\(field):\(recipientLookupQuery.lowercased())"
+    }
+
+    private func mergeRecipients(
+        _ preferred: [RubidiumMailAddress],
+        _ existing: [RubidiumMailAddress]
+    ) -> [RubidiumMailAddress] {
+        var seen = Set<String>()
+        return (preferred + existing).filter {
+            seen.insert($0.address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()).inserted
         }
     }
 

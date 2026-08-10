@@ -10,6 +10,7 @@ import {
   MICROSOFT_SCOPES,
 } from "@/lib/mail/calendar-core";
 import { providerLabelId, threadListViewFilter } from "@/lib/mail/thread-list-filter";
+import { rankRecipientSuggestions } from "@/lib/mail/recipient-suggestions";
 import type {
   CalendarEventDetail,
   CalendarEventSummary,
@@ -1562,6 +1563,41 @@ export function listThreads(
       )
     : mailboxScoped
   ).slice(0, limit);
+}
+
+export function listRecipientSuggestions(
+  userId: string,
+  query = "",
+  limit = 50,
+): MailAddress[] {
+  const database = getDatabase();
+  const ownAddresses = (
+    database
+      .prepare("SELECT email FROM mail_accounts WHERE user_id = ?")
+      .all(userId) as Array<{ email: string }>
+  ).map((row) => row.email);
+  const rows = database
+    .prepare(
+      `SELECT t.participants_cipher, t.last_message_at
+       FROM mail_threads t
+       JOIN mail_accounts a ON a.id = t.account_id
+       WHERE a.user_id = ?
+       ORDER BY t.last_message_at DESC`,
+    )
+    .all(userId) as Array<{ participants_cipher: string; last_message_at: string }>;
+
+  const candidates = rows.flatMap((row) => {
+    try {
+      return decryptJson<MailAddress[]>(row.participants_cipher).map((participant) => ({
+        ...participant,
+        lastMessageAt: row.last_message_at,
+      }));
+    } catch {
+      return [];
+    }
+  });
+
+  return rankRecipientSuggestions(candidates, ownAddresses, query, limit);
 }
 
 export function getThread(id: string, userId?: string): ThreadDetail | null {
