@@ -690,7 +690,9 @@ private struct RubidiumMailboxSidebar: View {
                     ForEach(folders) { destination in row(destination) }
 
                     ForEach(store.accounts) { account in
-                        let accountBoxes = store.mailboxes.filter { $0.accountId == account.id }
+                        let accountBoxes = store.mailboxes.filter {
+                            $0.accountId == account.id && ($0.provider == "google" || $0.kind != "folder")
+                        }
                         if !accountBoxes.isEmpty {
                             sidebarHeader(account.displayName.isEmpty ? account.email : account.displayName)
                                 .padding(.top, 22)
@@ -701,7 +703,7 @@ private struct RubidiumMailboxSidebar: View {
                                     symbol: mailboxSymbol(mailbox.kind),
                                     kind: .provider,
                                     accountId: account.id,
-                                    providerView: mailbox.kind
+                                    providerView: mailbox.kind == "label" ? "label:\(mailbox.id)" : mailbox.kind
                                 ), count: mailbox.unreadCount)
                             }
                         }
@@ -822,20 +824,56 @@ private struct RubidiumMailboxSidebar: View {
     }
 }
 
+private enum RubidiumThreadFilter: String, CaseIterable, Identifiable {
+    case all
+    case unread
+    case flagged
+    case attachments
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .all: "All messages"
+        case .unread: "Unread"
+        case .flagged: "Flagged"
+        case .attachments: "With attachments"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .all: "tray.full"
+        case .unread: "envelope.badge"
+        case .flagged: "flag"
+        case .attachments: "paperclip"
+        }
+    }
+
+    func includes(_ thread: RubidiumThreadSummary) -> Bool {
+        switch self {
+        case .all: true
+        case .unread: thread.unread
+        case .flagged: thread.flagged
+        case .attachments: thread.attachmentCount > 0
+        }
+    }
+}
+
 private struct RubidiumMailboxView: View {
     @ObservedObject var store: RubidiumNativeStore
     let destination: RubidiumMailboxDestination
     @Binding var composeRequest: RubidiumComposerRequest?
     let presentIntelligence: () -> Void
     let openMailboxes: () -> Void
-    @State private var filterUnread = false
+    @State private var filter: RubidiumThreadFilter = .all
     @State private var editMode: EditMode = .inactive
     @State private var selected = Set<String>()
     @State private var showSearch = false
     @State private var navigationPath = NavigationPath()
 
     private var visibleThreads: [RubidiumThreadSummary] {
-        store.threads.filter { !filterUnread || $0.unread }
+        store.threads.filter(filter.includes)
     }
 
     var body: some View {
@@ -847,12 +885,11 @@ private struct RubidiumMailboxView: View {
                         title: destination.title,
                         subtitle: headerSubtitle,
                         count: visibleThreads.count,
-                        unreadOnly: filterUnread,
+                        filter: $filter,
                         selecting: editMode == .active,
                         openMailboxes: openMailboxes,
                         openSearch: { showSearch = true },
                         compose: { composeRequest = .new },
-                        toggleUnread: { withAnimation(.smooth) { filterUnread.toggle() } },
                         toggleSelection: toggleSelection
                     )
 
@@ -987,11 +1024,23 @@ private struct RubidiumMailboxView: View {
                     openMailboxes: nil
                 )
             }
-            .task(id: destination.id) { await refresh() }
+            .task(id: destination.id) {
+#if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("--rubidium-audit-filter") {
+                    filter = .unread
+                }
+#endif
+                await refresh()
+            }
             .onChange(of: destination.id) { _, _ in
                 navigationPath = NavigationPath()
+                filter = .all
                 selected.removeAll()
                 editMode = .inactive
+            }
+            .onChange(of: filter) { _, _ in
+                selected.removeAll()
+                RubidiumHaptics.shared.play(.selection)
             }
         }
     }
@@ -1050,15 +1099,24 @@ private struct RubidiumMailboxView: View {
     }
 
     private var emptyDescription: String {
-        filterUnread ? "There are no unread conversations here." : "New messages will appear here."
+        switch filter {
+        case .all: "New messages will appear here."
+        case .unread: "There are no unread conversations here."
+        case .flagged: "There are no flagged conversations here."
+        case .attachments: "There are no conversations with attachments here."
+        }
     }
 
     private func apiView() -> String? {
         switch destination.kind {
+        case .needsAttention: "attention"
         case .flagged: "flagged"
         case .vip: "vip"
         case .snoozed: "snoozed"
+        case .drafts: "drafts"
+        case .sent: "sent"
         case .archive: "archive"
+        case .junk: "junk"
         case .trash: "trash"
         case .provider: destination.providerView
         default: nil
@@ -1091,12 +1149,11 @@ private struct RubidiumInboxHeader: View {
     let title: String
     let subtitle: String
     let count: Int
-    let unreadOnly: Bool
+    @Binding var filter: RubidiumThreadFilter
     let selecting: Bool
     let openMailboxes: () -> Void
     let openSearch: () -> Void
     let compose: () -> Void
-    let toggleUnread: () -> Void
     let toggleSelection: () -> Void
 
     var body: some View {
@@ -1151,9 +1208,10 @@ private struct RubidiumInboxHeader: View {
                 Text(count, format: .number)
                     .monospacedDigit()
                 Text(count == 1 ? "conversation" : "conversations")
-                if unreadOnly {
+                if filter != .all {
                     Text("·")
-                    Text("Unread only")
+                    Label(filter.title, systemImage: filter.symbol)
+                        .labelStyle(.titleOnly)
                         .foregroundStyle(RubidiumTheme.accent)
                 }
                 Spacer()
@@ -1207,17 +1265,23 @@ private struct RubidiumInboxHeader: View {
     private var actionButtons: some View {
         HStack(spacing: 5) {
             Menu {
-                Button(unreadOnly ? "Show all" : "Unread only", systemImage: unreadOnly ? "tray.full" : "envelope.badge") {
-                    toggleUnread()
+                Picker("Show", selection: $filter) {
+                    ForEach(RubidiumThreadFilter.allCases) { option in
+                        Label(option.title, systemImage: option.symbol)
+                            .tag(option)
+                    }
                 }
+
+                Divider()
+
                 Button(selecting ? "Done selecting" : "Select messages", systemImage: selecting ? "checkmark" : "checkmark.circle") {
                     toggleSelection()
                 }
             } label: {
-                Image(systemName: unreadOnly ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
+                Image(systemName: filter == .all ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
                     .frame(width: 42, height: 42)
             }
-            .accessibilityLabel("Filter and select")
+            .accessibilityLabel(filter == .all ? "Filter and select" : "Filtered by \(filter.title)")
 
             Button(action: compose) {
                 Image(systemName: "square.and.pencil")
@@ -2094,6 +2158,14 @@ struct RubidiumComposerPayload: Hashable, Codable {
     }
 }
 
+private struct RubidiumRecipientSuggestion: Identifiable, Hashable {
+    let name: String
+    let address: String
+
+    var id: String { address.lowercased() }
+    var displayName: String { name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? address : name }
+}
+
 private struct RubidiumMailComposer: View {
     @ObservedObject var store: RubidiumNativeStore
     let request: RubidiumComposerRequest
@@ -2140,10 +2212,18 @@ private struct RubidiumMailComposer: View {
                     }
                     TextField("Subject", text: $subject)
                         .focused($focused, equals: .subject)
+                        .keyboardType(.default)
+                        .textInputAutocapitalization(.sentences)
+                        .autocorrectionDisabled(false)
+                        .submitLabel(.next)
+                        .onSubmit { focused = .body }
                 }
                 Section {
                     TextEditor(text: $richBody, selection: $textSelection)
                         .focused($focused, equals: .body)
+                        .keyboardType(.default)
+                        .textInputAutocapitalization(.sentences)
+                        .autocorrectionDisabled(false)
                         .frame(minHeight: 260)
                         .scrollDismissesKeyboard(.interactively)
                         .accessibilityLabel("Message")
@@ -2327,13 +2407,135 @@ private struct RubidiumMailComposer: View {
     }
     private var localDraftKey: String { "composer:\(request.id)" }
 
+    private var knownRecipients: [RubidiumRecipientSuggestion] {
+        let ownAddresses = Set(store.accounts.map { $0.email.lowercased() })
+        let activeParticipants = store.activeThread?.participants ?? []
+        var seen = Set<String>()
+
+        return (activeParticipants + store.threads.flatMap(\.participants)).compactMap { participant in
+            let address = participant.address.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = address.lowercased()
+            guard address.contains("@"), !ownAddresses.contains(key), seen.insert(key).inserted else {
+                return nil
+            }
+            return RubidiumRecipientSuggestion(name: participant.name, address: address)
+        }
+    }
+
     private func recipientField(_ label: String, text: Binding<String>, field: Field) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(label).foregroundStyle(.secondary).frame(width: 34, alignment: .leading)
-            TextField("name@example.com", text: text)
-                .textInputAutocapitalization(.never)
-                .keyboardType(.emailAddress)
-                .focused($focused, equals: field)
+        let suggestions = recipientSuggestions(for: text.wrappedValue, field: field)
+
+        return VStack(alignment: .leading, spacing: suggestions.isEmpty ? 0 : 9) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(label)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 34, alignment: .leading)
+                TextField("name@example.com", text: text)
+                    .textContentType(.emailAddress)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
+                    .keyboardType(.emailAddress)
+                    .submitLabel(.next)
+                    .focused($focused, equals: field)
+                    .onSubmit { advance(from: field) }
+            }
+
+            if !suggestions.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(Array(suggestions.prefix(3).enumerated()), id: \.element.id) { index, suggestion in
+                        if index > 0 {
+                            Divider()
+                                .padding(.leading, 34)
+                        }
+
+                        Button {
+                            completeRecipient(suggestion, in: text, field: field)
+                        } label: {
+                            HStack(spacing: 9) {
+                                Text(String(suggestion.displayName.prefix(1)).uppercased())
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(RubidiumTheme.accent)
+                                    .frame(width: 27, height: 27)
+                                    .background(RubidiumTheme.accent.opacity(0.12), in: Circle())
+
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(suggestion.displayName)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                    if suggestion.displayName != suggestion.address {
+                                        Text(suggestion.address)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .lineLimit(1)
+
+                                Spacer(minLength: 8)
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.body)
+                                    .foregroundStyle(RubidiumTheme.accent)
+                            }
+                            .padding(.vertical, 7)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Add \(suggestion.displayName), \(suggestion.address)")
+                    }
+                }
+                .padding(.leading, 42)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .animation(.smooth(duration: 0.18), value: suggestions.map(\.id))
+    }
+
+    private func recipientSuggestions(for value: String, field: Field) -> [RubidiumRecipientSuggestion] {
+        guard focused == field else { return [] }
+        let token = currentRecipientToken(in: value)
+        let completed = Set(parse(value).map { $0.lowercased() })
+
+        return Array(
+            knownRecipients
+                .filter { suggestion in
+                    guard !completed.contains(suggestion.address.lowercased()) else { return false }
+                    return token.isEmpty
+                        || suggestion.address.localizedCaseInsensitiveContains(token)
+                        || suggestion.displayName.localizedCaseInsensitiveContains(token)
+                }
+                .prefix(token.isEmpty ? 4 : 6)
+        )
+    }
+
+    private func currentRecipientToken(in value: String) -> String {
+        value.split(
+            omittingEmptySubsequences: false,
+            whereSeparator: { $0 == "," || $0 == ";" || $0 == "\n" }
+        )
+        .last?
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private func completeRecipient(
+        _ suggestion: RubidiumRecipientSuggestion,
+        in text: Binding<String>,
+        field: Field
+    ) {
+        let value = text.wrappedValue
+        if let separator = value.lastIndex(where: { $0 == "," || $0 == ";" || $0 == "\n" }) {
+            text.wrappedValue = String(value[...separator]) + " " + suggestion.address + ", "
+        } else {
+            text.wrappedValue = suggestion.address + ", "
+        }
+        focused = field
+        RubidiumHaptics.shared.play(.selection)
+    }
+
+    private func advance(from field: Field) {
+        switch field {
+        case .to: focused = showDetails ? .cc : .subject
+        case .cc: focused = .bcc
+        case .bcc, .subject: focused = .body
+        case .body: focused = nil
         }
     }
 

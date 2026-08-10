@@ -9,6 +9,7 @@ import {
   GOOGLE_SCOPES,
   MICROSOFT_SCOPES,
 } from "@/lib/mail/calendar-core";
+import { providerLabelId, threadListViewFilter } from "@/lib/mail/thread-list-filter";
 import type {
   CalendarEventDetail,
   CalendarEventSummary,
@@ -1517,26 +1518,13 @@ export function listThreads(
   const clauses = ["a.user_id = ?"];
   const values: Array<string | number | null> = [userId];
   const now = new Date().toISOString();
-  switch (options.view) {
-    case "archive": clauses.push("t.mailbox_kind = 'archive'"); break;
-    case "sent": clauses.push("t.mailbox_kind = 'sent'"); break;
-    case "drafts": clauses.push("t.mailbox_kind = 'drafts'"); break;
-    case "junk": clauses.push("t.mailbox_kind = 'junk'"); break;
-    case "flagged": clauses.push("t.flagged = 1"); break;
-    case "vip": clauses.push("t.vip = 1"); break;
-    case "snoozed": clauses.push("t.snoozed_until IS NOT NULL"); break;
-    case "trash": clauses.push("t.mailbox_kind = 'trash'"); break;
-    default:
-      // Search spans the encrypted local history rather than silently being
-      // constrained to the current inbox. Normal mailbox loads retain the
-      // inbox/snooze contract.
-      if (!options.query?.trim()) {
-        clauses.push("t.mailbox_kind = 'inbox'");
-        clauses.push("t.archived = 0");
-        clauses.push("(t.snoozed_until IS NULL OR t.snoozed_until <= ?)");
-        values.push(now);
-      }
-  }
+  // Search spans the encrypted local history rather than silently being
+  // constrained to the current inbox. Normal mailbox loads retain the
+  // inbox/snooze contract.
+  const viewFilter = threadListViewFilter(options.view, now, Boolean(options.query?.trim()));
+  clauses.push(...viewFilter.clauses);
+  values.push(...viewFilter.values);
+  const labelId = providerLabelId(options.view);
   if (options.accountId) {
     clauses.push("t.account_id = ?");
     values.push(options.accountId);
@@ -1558,18 +1546,21 @@ export function listThreads(
        ORDER BY t.last_message_at DESC
        LIMIT ?`,
     )
-    .all(...values, options.query?.trim() ? 5_000 : limit * 3) as Record<string, unknown>[];
+    .all(...values, options.query?.trim() || labelId ? 5_000 : limit * 3) as Record<string, unknown>[];
   const normalizedQuery = options.query?.trim().toLowerCase();
   const summaries = rows.map(threadRowToSummary);
+  const mailboxScoped = labelId
+    ? summaries.filter((thread) => thread.labels.includes(labelId))
+    : summaries;
   return (normalizedQuery
-    ? summaries.filter((thread) =>
+    ? mailboxScoped.filter((thread) =>
         [thread.subject, thread.snippet, thread.email, thread.displayName,
           ...thread.participants.flatMap((participant) => [participant.name, participant.address])]
           .join(" ")
           .toLowerCase()
           .includes(normalizedQuery),
       )
-    : summaries
+    : mailboxScoped
   ).slice(0, limit);
 }
 
