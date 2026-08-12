@@ -407,7 +407,7 @@ struct RubidiumThreadRow: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            if thread.unread {
+            if thread.unread && selectionState == nil {
                 Rectangle()
                     .fill(RubidiumTheme.accent)
                     .frame(width: 3)
@@ -420,7 +420,19 @@ struct RubidiumThreadRow: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 11)
         }
-        .background(thread.unread ? RubidiumTheme.elevated.opacity(0.5) : Color.clear)
+        .background {
+            if selectionState == true {
+                LinearGradient(
+                    colors: [RubidiumTheme.accent.opacity(0.12), RubidiumTheme.accent.opacity(0.035)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            } else if thread.unread {
+                RubidiumTheme.elevated.opacity(0.5)
+            } else {
+                Color.clear
+            }
+        }
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(RubidiumTheme.rule)
@@ -496,8 +508,14 @@ struct RubidiumThreadRow: View {
                         .background(thread.provider == "google" ? RubidiumTheme.accent : Color.blue, in: Circle())
                         .overlay { Circle().stroke(RubidiumTheme.canvas, lineWidth: 2) }
                         .offset(x: 3, y: 3)
-                }
+                    }
             }
+            .scaleEffect(selectionState == true ? 1.035 : 1)
+            .shadow(
+                color: selectionState == true ? RubidiumTheme.accent.opacity(0.2) : .clear,
+                radius: 9,
+                y: 4
+            )
     }
 
     private var content: some View {

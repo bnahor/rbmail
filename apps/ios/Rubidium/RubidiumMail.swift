@@ -594,6 +594,8 @@ struct RubidiumMailAppShell: View {
             compactTab = .search
         } else if arguments.contains("--rubidium-audit-menu") {
             compactSidebarOpen = true
+        } else if arguments.contains("--rubidium-demo-sidebar") {
+            compactSidebarOpen = true
         } else if arguments.contains("--rubidium-audit-settings") {
             compactSettingsOpen = true
         } else if arguments.contains("--rubidium-audit-compose") {
@@ -625,12 +627,16 @@ private enum RubidiumPrimaryTab: Hashable {
 
 private struct RubidiumMailboxSidebar: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var store: RubidiumNativeStore
     @Binding var selection: RubidiumMailboxDestination?
     let compose: () -> Void
     var didSelect: () -> Void = {}
     var openAccounts: (() -> Void)? = nil
     var showsTopLevelDestinations = true
+    @State private var systemFoldersExpanded = false
+    @State private var expandedAccountIds = Set<String>()
+    @State private var preparedHierarchy = false
 
     private let main: [RubidiumMailboxDestination] = [
         .current,
@@ -703,25 +709,13 @@ private struct RubidiumMailboxSidebar: View {
 
                     sidebarHeader("Mailboxes")
                         .padding(.top, 22)
-                    ForEach(folders) { destination in row(destination) }
+                    systemFolderGroup
 
-                    ForEach(store.accounts) { account in
-                        let accountBoxes = store.mailboxes.filter {
-                            $0.accountId == account.id && ($0.provider == "google" || $0.kind != "folder")
-                        }
-                        if !accountBoxes.isEmpty {
-                            sidebarHeader(account.displayName.isEmpty ? account.email : account.displayName)
-                                .padding(.top, 22)
-                            ForEach(accountBoxes) { mailbox in
-                                row(.init(
-                                    id: "provider:\(mailbox.id)",
-                                    title: mailbox.name,
-                                    symbol: mailboxSymbol(mailbox.kind),
-                                    kind: .provider,
-                                    accountId: account.id,
-                                    providerView: mailbox.kind == "label" ? "label:\(mailbox.id)" : mailbox.kind
-                                ), count: mailbox.unreadCount)
-                            }
+                    if !store.accounts.isEmpty {
+                        sidebarHeader("Accounts")
+                            .padding(.top, 22)
+                        ForEach(store.accounts) { account in
+                            accountGroup(account, mailboxes: providerMailboxes(for: account))
                         }
                     }
 
@@ -750,6 +744,32 @@ private struct RubidiumMailboxSidebar: View {
         }
         .preferredColorScheme(.dark)
         .foregroundStyle(.white)
+        .task(id: store.accounts.map(\.id)) {
+            guard !preparedHierarchy, let firstAccount = store.accounts.first else { return }
+            preparedHierarchy = true
+            let initialId = selection?.accountId ?? firstAccount.id
+            systemFoldersExpanded = selection.map(isSystemFolder) ?? false
+#if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--rubidium-demo-sidebar") {
+                try? await Task.sleep(for: .milliseconds(900))
+            }
+#endif
+            _ = withAnimation(sidebarAnimation) {
+                expandedAccountIds.insert(initialId)
+            }
+        }
+        .onChange(of: selection?.accountId) { _, accountId in
+            guard let accountId else { return }
+            _ = withAnimation(sidebarAnimation) {
+                expandedAccountIds.insert(accountId)
+            }
+        }
+        .onChange(of: selection?.kind) { _, kind in
+            guard let kind, folders.contains(where: { $0.kind == kind }) else { return }
+            withAnimation(sidebarAnimation) {
+                systemFoldersExpanded = true
+            }
+        }
     }
 
     private func sidebarHeader(_ title: String) -> some View {
@@ -761,7 +781,11 @@ private struct RubidiumMailboxSidebar: View {
             .padding(.bottom, 8)
     }
 
-    private func row(_ destination: RubidiumMailboxDestination, count: Int = 0) -> some View {
+    private func row(
+        _ destination: RubidiumMailboxDestination,
+        count: Int = 0,
+        nested: Bool = false
+    ) -> some View {
         Button {
             selection = destination
             RubidiumHaptics.shared.play(.selection)
@@ -771,12 +795,155 @@ private struct RubidiumMailboxSidebar: View {
                 title: destination.title,
                 symbol: destination.symbol,
                 selected: selection == destination,
-                count: count
+                count: count,
+                nested: nested
             )
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 8)
+        .padding(.leading, nested ? 28 : 8)
+        .padding(.trailing, 8)
         .accessibilityAddTraits(selection == destination ? .isSelected : [])
+    }
+
+    private func accountGroup(
+        _ account: RubidiumAccount,
+        mailboxes: [RubidiumMailbox]
+    ) -> some View {
+        let expanded = expandedAccountIds.contains(account.id)
+        let active = selection?.accountId == account.id
+
+        return VStack(spacing: 0) {
+            Button {
+                withAnimation(sidebarAnimation) {
+                    if expanded {
+                        expandedAccountIds.remove(account.id)
+                    } else {
+                        expandedAccountIds.insert(account.id)
+                    }
+                }
+                RubidiumHaptics.shared.play(.selection)
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: account.provider == "google" ? "envelope.fill" : "square.grid.2x2.fill")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(active ? RubidiumTheme.accentSoft : .white.opacity(0.72))
+                        .frame(width: 36, height: 36)
+                        .background(.white.opacity(active ? 0.11 : 0.065), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(account.displayName.isEmpty ? account.email : account.displayName)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        Text(accountSubtitle(account))
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.46))
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 8)
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(active ? RubidiumTheme.accentSoft : .white.opacity(0.42))
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(
+                    active ? RubidiumTheme.sidebarSurface : Color.white.opacity(0.025),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(account.displayName.isEmpty ? account.email : account.displayName) mailboxes")
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+
+            if expanded {
+                VStack(spacing: 0) {
+                    if mailboxes.isEmpty {
+                        Text("No provider folders")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.42))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 70)
+                            .padding(.vertical, 10)
+                    } else {
+                        ForEach(mailboxes) { mailbox in
+                            row(.init(
+                                id: "provider:\(mailbox.id)",
+                                title: mailboxTitle(mailbox.name),
+                                symbol: mailboxSymbol(mailbox.kind),
+                                kind: .provider,
+                                accountId: account.id,
+                                providerView: mailbox.kind == "label" ? "label:\(mailbox.id)" : mailbox.kind
+                            ), count: mailbox.unreadCount, nested: true)
+                        }
+                    }
+                }
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(active ? RubidiumTheme.accent.opacity(0.48) : Color.white.opacity(0.12))
+                        .frame(width: 1)
+                        .padding(.leading, 30)
+                        .padding(.vertical, 7)
+                }
+                .clipped()
+                .transition(nestedTransition)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 4)
+    }
+
+    private var systemFolderGroup: some View {
+        VStack(spacing: 0) {
+            Button {
+                withAnimation(sidebarAnimation) {
+                    systemFoldersExpanded.toggle()
+                }
+                RubidiumHaptics.shared.play(.selection)
+            } label: {
+                HStack(spacing: 13) {
+                    Image(systemName: "tray.2")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 28)
+                    Text("System folders")
+                        .font(.body.weight(.medium))
+                    Spacer(minLength: 12)
+                    Text(folders.count, format: .number)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.4))
+                    Image(systemName: systemFoldersExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.42))
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(Color.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(systemFoldersExpanded ? "Expanded" : "Collapsed")
+
+            if systemFoldersExpanded {
+                VStack(spacing: 0) {
+                    ForEach(folders) { destination in
+                        row(destination, nested: true)
+                    }
+                }
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(.white.opacity(0.12))
+                        .frame(width: 1)
+                        .padding(.leading, 30)
+                        .padding(.vertical, 7)
+                }
+                .clipped()
+                .transition(nestedTransition)
+            }
+        }
+        .padding(.horizontal, 8)
     }
 
     private var visibleMain: [RubidiumMailboxDestination] {
@@ -787,12 +954,13 @@ private struct RubidiumMailboxSidebar: View {
         title: String,
         symbol: String,
         selected: Bool,
-        count: Int
+        count: Int,
+        nested: Bool = false
     ) -> some View {
         HStack(spacing: 13) {
             Image(systemName: symbol)
                 .symbolVariant(selected ? .fill : .none)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: nested ? 16 : 18, weight: .semibold))
                 .foregroundStyle(selected ? RubidiumTheme.accentSoft : .white.opacity(0.68))
                 .frame(width: 28)
             Text(title)
@@ -813,7 +981,7 @@ private struct RubidiumMailboxSidebar: View {
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        .padding(.vertical, nested ? 9 : 11)
         .background {
             if selected {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
@@ -835,8 +1003,43 @@ private struct RubidiumMailboxSidebar: View {
         case "archive": "archivebox"
         case "junk": "xmark.bin"
         case "trash": "trash"
+        case "label": "tag"
+        case "inbox": "tray.full"
         default: "tray"
         }
+    }
+
+    private func providerMailboxes(for account: RubidiumAccount) -> [RubidiumMailbox] {
+        store.mailboxes.filter {
+            $0.accountId == account.id && ($0.provider == "google" || $0.kind != "folder")
+        }
+    }
+
+    private func accountSubtitle(_ account: RubidiumAccount) -> String {
+        let provider = account.provider == "google" ? "Gmail" : "Outlook"
+        if account.displayName.isEmpty || account.displayName.caseInsensitiveCompare(account.email) == .orderedSame {
+            return provider
+        }
+        return "\(provider) · \(account.email)"
+    }
+
+    private func mailboxTitle(_ value: String) -> String {
+        let normalized = value.replacingOccurrences(of: "_", with: " ")
+        return normalized == normalized.uppercased() ? normalized.localizedCapitalized : normalized
+    }
+
+    private func isSystemFolder(_ destination: RubidiumMailboxDestination) -> Bool {
+        folders.contains(where: { $0.kind == destination.kind })
+    }
+
+    private var sidebarAnimation: Animation? {
+        reduceMotion ? nil : .smooth(duration: 0.3, extraBounce: 0.03)
+    }
+
+    private var nestedTransition: AnyTransition {
+        reduceMotion
+            ? .opacity
+            : .opacity.combined(with: .scale(scale: 0.985, anchor: .top))
     }
 }
 
@@ -877,6 +1080,7 @@ private enum RubidiumThreadFilter: String, CaseIterable, Identifiable {
 }
 
 private struct RubidiumMailboxView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var store: RubidiumNativeStore
     let destination: RubidiumMailboxDestination
     @Binding var composeRequest: RubidiumComposerRequest?
@@ -1012,9 +1216,9 @@ private struct RubidiumMailboxView: View {
                         archive: { bulk(.archive) },
                         trash: { bulk(.trash) }
                     )
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 10)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 } else {
                     Button(action: presentIntelligence) {
                         RubidiumBrandMark(size: 54, cornerRadius: 17)
@@ -1034,6 +1238,7 @@ private struct RubidiumMailboxView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .toolbar(editMode == .active ? .hidden : .visible, for: .tabBar)
             .navigationDestination(for: RubidiumThreadSummary.self) { thread in
                 RubidiumThreadDetailView(store: store, summary: thread, composeRequest: $composeRequest)
             }
@@ -1061,6 +1266,8 @@ private struct RubidiumMailboxView: View {
                 if ProcessInfo.processInfo.arguments.contains("--rubidium-audit-selection") {
                     editMode = .active
                     selected = Set(visibleThreads.prefix(3).map(\.id))
+                } else if ProcessInfo.processInfo.arguments.contains("--rubidium-demo-selection") {
+                    await runSelectionDemo()
                 }
 #endif
             }
@@ -1120,7 +1327,7 @@ private struct RubidiumMailboxView: View {
     }
 
     private func toggleSelection() {
-        withAnimation(.smooth(duration: 0.22)) {
+        withAnimation(selectionAnimation(duration: 0.24)) {
             if editMode == .active {
                 editMode = .inactive
                 selected.removeAll()
@@ -1131,7 +1338,7 @@ private struct RubidiumMailboxView: View {
     }
 
     private func beginSelection(with thread: RubidiumThreadSummary) {
-        withAnimation(.smooth(duration: 0.22)) {
+        withAnimation(selectionAnimation(duration: 0.24)) {
             editMode = .active
             selected = [thread.id]
         }
@@ -1139,7 +1346,7 @@ private struct RubidiumMailboxView: View {
     }
 
     private func toggleSelected(_ thread: RubidiumThreadSummary) {
-        withAnimation(.smooth(duration: 0.16)) {
+        withAnimation(selectionAnimation(duration: 0.18)) {
             if selected.contains(thread.id) {
                 selected.remove(thread.id)
             } else {
@@ -1150,7 +1357,7 @@ private struct RubidiumMailboxView: View {
     }
 
     private func toggleSelectAll() {
-        withAnimation(.smooth(duration: 0.2)) {
+        withAnimation(selectionAnimation(duration: 0.22)) {
             if !visibleThreads.isEmpty && selected.count == visibleThreads.count {
                 selected.removeAll()
             } else {
@@ -1159,6 +1366,32 @@ private struct RubidiumMailboxView: View {
         }
         RubidiumHaptics.shared.play(.selection)
     }
+
+    private func selectionAnimation(duration: TimeInterval) -> Animation? {
+        reduceMotion ? nil : .smooth(duration: duration, extraBounce: 0.04)
+    }
+
+#if DEBUG
+    private func runSelectionDemo() async {
+        let samples = Array(visibleThreads.prefix(3))
+        guard samples.count == 3 else { return }
+        try? await Task.sleep(for: .milliseconds(900))
+        guard !Task.isCancelled else { return }
+        beginSelection(with: samples[0])
+        try? await Task.sleep(for: .milliseconds(650))
+        guard !Task.isCancelled else { return }
+        toggleSelected(samples[1])
+        try? await Task.sleep(for: .milliseconds(560))
+        guard !Task.isCancelled else { return }
+        toggleSelected(samples[2])
+        try? await Task.sleep(for: .milliseconds(900))
+        guard !Task.isCancelled else { return }
+        toggleSelected(samples[1])
+        try? await Task.sleep(for: .milliseconds(480))
+        guard !Task.isCancelled else { return }
+        toggleSelected(samples[1])
+    }
+#endif
 
     private var emptyDescription: String {
         switch filter {
@@ -1208,6 +1441,7 @@ private struct RubidiumMailboxView: View {
 
 private struct RubidiumInboxHeader: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let title: String
     let subtitle: String
     let count: Int
@@ -1239,45 +1473,53 @@ private struct RubidiumInboxHeader: View {
                 }
             }
 
-            Button(action: openSearch) {
-                HStack(spacing: 11) {
-                    Image(systemName: "sparkle.magnifyingglass")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(RubidiumTheme.accent)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(dynamicTypeSize.isAccessibilitySize ? "Search" : "Ask anything about your mail")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        if !dynamicTypeSize.isAccessibilitySize {
-                            Text("People, intent, attachments, and events")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+            if !selecting {
+                Button(action: openSearch) {
+                    HStack(spacing: 11) {
+                        Image(systemName: "sparkle.magnifyingglass")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(RubidiumTheme.accent)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(dynamicTypeSize.isAccessibilitySize ? "Search" : "Ask anything about your mail")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
                                 .lineLimit(1)
+                            if !dynamicTypeSize.isAccessibilitySize {
+                                Text("People, intent, attachments, and events")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
                         }
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.tertiary)
                     }
-                    Spacer()
-                    Image(systemName: "arrow.up.right")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .rubidiumPlane(cornerRadius: 13)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .rubidiumPlane(cornerRadius: 13)
+                .buttonStyle(.plain)
+                .dynamicTypeSize(.small ... .accessibility1)
+                .accessibilityHint("Search mail and calendar with natural language")
+                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
             }
-            .buttonStyle(.plain)
-            .dynamicTypeSize(.small ... .accessibility1)
-            .accessibilityHint("Search mail and calendar with natural language")
 
             HStack(spacing: 7) {
-                Text(selecting ? selectionCount : count, format: .number)
-                    .monospacedDigit()
-                Text(selecting ? "selected" : (count == 1 ? "conversation" : "conversations"))
-                if !selecting && filter != .all {
-                    Text("·")
-                    Label(filter.title, systemImage: filter.symbol)
-                        .labelStyle(.titleOnly)
-                        .foregroundStyle(RubidiumTheme.accent)
+                if selecting {
+                    Image(systemName: "hand.tap")
+                    Text("Tap conversations to add or remove")
+                } else {
+                    Text(count, format: .number)
+                        .monospacedDigit()
+                    Text(count == 1 ? "conversation" : "conversations")
+                    if filter != .all {
+                        Text("·")
+                        Label(filter.title, systemImage: filter.symbol)
+                            .labelStyle(.titleOnly)
+                            .foregroundStyle(RubidiumTheme.accent)
+                    }
                 }
                 Spacer()
             }
@@ -1293,6 +1535,8 @@ private struct RubidiumInboxHeader: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(RubidiumTheme.rule).frame(height: 0.5)
         }
+        .animation(reduceMotion ? nil : .smooth(duration: 0.26, extraBounce: 0.02), value: selecting)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.18), value: selectionCount)
     }
 
     private var mailboxButton: some View {
@@ -1314,16 +1558,17 @@ private struct RubidiumInboxHeader: View {
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 1) {
             if !dynamicTypeSize.isAccessibilitySize {
-                Text(subtitle.uppercased())
+                Text(selecting ? "SELECTION" : subtitle.uppercased())
                     .font(.caption2.weight(.bold))
                     .tracking(0.8)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            Text(title)
+            Text(selecting ? "\(selectionCount) selected" : title)
                 .font(.title.weight(.bold))
                 .tracking(-0.7)
                 .lineLimit(1)
+                .contentTransition(.numericText(value: Double(selectionCount)))
         }
     }
 
@@ -1382,19 +1627,37 @@ private struct RubidiumBulkActionBar: View {
     let trash: () -> Void
 
     var body: some View {
-        HStack(spacing: 4) {
-            Text(selectionCount, format: .number)
-                .font(.caption.weight(.bold))
-                .monospacedDigit()
-                .frame(minWidth: 34)
-                .accessibilityLabel("\(selectionCount) selected")
+        HStack(spacing: 3) {
+            VStack(spacing: 0) {
+                Text(selectionCount, format: .number)
+                    .font(.headline.weight(.bold))
+                    .monospacedDigit()
+                    .contentTransition(.numericText(value: Double(selectionCount)))
+                Text("Selected")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 54)
+            .frame(minHeight: 48)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(selectionCount) selected")
+
+            Divider()
+                .frame(height: 32)
+                .padding(.horizontal, 1)
+
             action("Read", "envelope.open", markRead)
             action("Flag", "flag", flag)
             action("Archive", "archivebox", archive)
             action("Trash", "trash", trash, destructive: true)
         }
-        .padding(5)
-        .rubidiumGlass(cornerRadius: 20, interactive: true)
+        .padding(6)
+        .rubidiumGlass(cornerRadius: 24, interactive: true)
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(.white.opacity(0.12), lineWidth: 0.75)
+        }
+        .shadow(color: .black.opacity(0.24), radius: 22, y: 10)
     }
 
     private func action(
@@ -1403,11 +1666,20 @@ private struct RubidiumBulkActionBar: View {
         _ action: @escaping () -> Void,
         destructive: Bool = false
     ) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .foregroundStyle(destructive ? RubidiumTheme.accent : .primary)
+        Button {
+            RubidiumHaptics.shared.play(destructive ? .destructive : .action)
+            action()
+        } label: {
+            VStack(spacing: 2) {
+                Image(systemName: symbol)
+                    .font(.system(size: 17, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .foregroundStyle(destructive ? RubidiumTheme.accentSoft : .primary)
         }
+        .buttonStyle(.plain)
         .accessibilityLabel(title)
         .disabled(selectionCount == 0)
     }
