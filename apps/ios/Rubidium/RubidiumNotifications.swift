@@ -2,6 +2,51 @@ import UIKit
 import UserNotifications
 
 @MainActor
+final class RubidiumQuickActions: ObservableObject {
+    enum Action: String, Hashable {
+        case compose = "dev.bnahor.rubidium.compose"
+        case search = "dev.bnahor.rubidium.search"
+        case today = "dev.bnahor.rubidium.today"
+    }
+
+    static let shared = RubidiumQuickActions()
+
+    @Published private(set) var pendingAction: Action?
+
+    @discardableResult
+    func enqueue(_ shortcutItem: UIApplicationShortcutItem) -> Bool {
+        guard let action = Action(rawValue: shortcutItem.type) else { return false }
+        pendingAction = action
+        return true
+    }
+
+    func consume() -> Action? {
+        defer { pendingAction = nil }
+        return pendingAction
+    }
+}
+
+@MainActor
+final class RubidiumSceneDelegate: NSObject, UIWindowSceneDelegate {
+    func scene(
+        _ scene: UIScene,
+        willConnectTo session: UISceneSession,
+        options connectionOptions: UIScene.ConnectionOptions
+    ) {
+        if let shortcutItem = connectionOptions.shortcutItem {
+            RubidiumQuickActions.shared.enqueue(shortcutItem)
+        }
+    }
+
+    func windowScene(
+        _ windowScene: UIWindowScene,
+        performActionFor shortcutItem: UIApplicationShortcutItem
+    ) async -> Bool {
+        RubidiumQuickActions.shared.enqueue(shortcutItem)
+    }
+}
+
+@MainActor
 final class RubidiumNotifications: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     static let shared = RubidiumNotifications()
 
@@ -131,6 +176,21 @@ final class RubidiumNotifications: NSObject, ObservableObject, UNUserNotificatio
 }
 
 final class RubidiumAppDelegate: NSObject, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        let configuration = UISceneConfiguration(
+            name: nil,
+            sessionRole: connectingSceneSession.role
+        )
+        if connectingSceneSession.role == .windowApplication {
+            configuration.delegateClass = RubidiumSceneDelegate.self
+        }
+        return configuration
+    }
+
     func application(
         _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data

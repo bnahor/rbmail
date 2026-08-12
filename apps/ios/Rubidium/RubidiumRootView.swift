@@ -21,6 +21,7 @@ struct RubidiumRootView: View {
                 browser: browser,
                 store: nativeStore,
                 security: security,
+                isSignedIn: isSignedIn,
                 presentIntelligence: presentIntelligence
             )
             .opacity(isSignedIn ? 1 : 0)

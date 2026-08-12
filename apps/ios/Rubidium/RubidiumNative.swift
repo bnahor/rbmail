@@ -440,6 +440,10 @@ struct RubidiumThreadRow: View {
                 .padding(.leading, thread.unread ? 75 : 72)
         }
         .contentShape(Rectangle())
+        .onLongPressGesture(minimumDuration: 0.42, maximumDistance: 12) {
+            guard selectionState == nil else { return }
+            selectionAction?()
+        }
         .animation(.smooth(duration: 0.2), value: selectionState)
     }
 

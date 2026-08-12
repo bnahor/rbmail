@@ -403,6 +403,7 @@ struct RubidiumMailAppShell: View {
     @ObservedObject var browser: RubidiumBrowserModel
     @ObservedObject var store: RubidiumNativeStore
     @ObservedObject var security: RubidiumAppLockModel
+    let isSignedIn: Bool
     let presentIntelligence: () -> Void
     @State private var selection: RubidiumMailboxDestination? = .current
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
@@ -415,6 +416,7 @@ struct RubidiumMailAppShell: View {
     @State private var didApplyDebugLaunchState = false
     @State private var debugCalendarComposerOpen = false
     @ObservedObject private var notifications = RubidiumNotifications.shared
+    @ObservedObject private var quickActions = RubidiumQuickActions.shared
 
     var body: some View {
         Group {
@@ -497,6 +499,7 @@ struct RubidiumMailAppShell: View {
             await store.loadNotificationPreferences()
             openPendingNotification()
             applyDebugLaunchStateIfNeeded()
+            applyQuickActionIfNeeded()
         }
         .fullScreenCover(item: $composeRequest) { request in
             RubidiumMailComposer(store: store, request: request)
@@ -517,6 +520,12 @@ struct RubidiumMailAppShell: View {
         }
         .onChange(of: notifications.pendingThreadId) { _, _ in
             openPendingNotification()
+        }
+        .onChange(of: quickActions.pendingAction) { _, _ in
+            applyQuickActionIfNeeded()
+        }
+        .onChange(of: isSignedIn) { _, signedIn in
+            if signedIn { applyQuickActionIfNeeded() }
         }
     }
 
@@ -571,6 +580,37 @@ struct RubidiumMailAppShell: View {
         selection = .current
         deepLinkedThread = thread
         notifications.pendingThreadId = nil
+    }
+
+    private func applyQuickActionIfNeeded() {
+        guard isSignedIn, let action = quickActions.consume() else { return }
+        RubidiumHaptics.shared.play(.selection)
+        switch action {
+        case .compose:
+            composeRequest = .new
+        case .search:
+            if horizontalSizeClass == .compact {
+                compactTab = .search
+            } else {
+                selection = .init(
+                    id: "search",
+                    title: "Search",
+                    symbol: "sparkle.magnifyingglass",
+                    kind: .search
+                )
+            }
+        case .today:
+            if horizontalSizeClass == .compact {
+                compactTab = .today
+            } else {
+                selection = .init(
+                    id: "today",
+                    title: "Today",
+                    symbol: "calendar",
+                    kind: .today
+                )
+            }
+        }
     }
 
     private var mailSelection: RubidiumMailboxDestination {
@@ -1133,7 +1173,24 @@ private struct RubidiumMailboxView: View {
                             ForEach(threadGroups) { group in
                                 Section {
                                     ForEach(group.threads) { thread in
-                                        threadRow(thread)
+                                        RubidiumThreadRow(
+                                            thread: thread,
+                                            selectionState: editMode == .active ? selected.contains(thread.id) : nil,
+                                            primaryAction: {
+                                                if editMode == .active {
+                                                    toggleSelected(thread)
+                                                } else {
+                                                    navigationPath.append(thread)
+                                                }
+                                            },
+                                            selectionAction: {
+                                                if editMode == .active {
+                                                    toggleSelected(thread)
+                                                } else {
+                                                    beginSelection(with: thread)
+                                                }
+                                            }
+                                        )
                                         .accessibilityAddTraits(selected.contains(thread.id) ? .isSelected : [])
                                         .listRowInsets(EdgeInsets())
                                         .listRowBackground(Color.clear)
@@ -1263,93 +1320,6 @@ private struct RubidiumMailboxView: View {
             .onChange(of: filter) { _, _ in
                 selected.removeAll()
                 RubidiumHaptics.shared.play(.selection)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func threadRow(_ thread: RubidiumThreadSummary) -> some View {
-        let row = RubidiumThreadRow(
-            thread: thread,
-            selectionState: editMode == .active ? selected.contains(thread.id) : nil,
-            primaryAction: {
-                if editMode == .active {
-                    toggleSelected(thread)
-                } else {
-                    navigationPath.append(thread)
-                }
-            },
-            selectionAction: {
-                if editMode == .active {
-                    toggleSelected(thread)
-                } else {
-                    beginSelection(with: thread)
-                }
-            }
-        )
-
-        if editMode == .active {
-            row
-        } else {
-            row.contextMenu {
-                threadContextMenu(thread)
-            } preview: {
-                RubidiumThreadContextPreview(thread: thread)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func threadContextMenu(_ thread: RubidiumThreadSummary) -> some View {
-        Button("Reply", systemImage: "arrowshape.turn.up.left") {
-            reply(to: thread)
-        }
-
-        Button(
-            thread.unread ? "Mark as Read" : "Mark as Unread",
-            systemImage: thread.unread ? "envelope.open" : "envelope.badge"
-        ) {
-            perform(thread.unread ? .read : .unread, on: thread)
-        }
-
-        Button(
-            thread.flagged ? "Remove Flag" : "Flag",
-            systemImage: thread.flagged ? "flag.slash" : "flag"
-        ) {
-            perform(thread.flagged ? .unflag : .flag, on: thread)
-        }
-
-        Divider()
-
-        Button("Select", systemImage: "checkmark.circle") {
-            beginSelection(with: thread)
-        }
-
-        if allowsArchiveInContextMenu {
-            Button("Archive", systemImage: "archivebox") {
-                perform(.archive, on: thread)
-            }
-        }
-
-        if isJunkDestination {
-            Button("Not Junk", systemImage: "tray.and.arrow.up") {
-                perform(.notJunk, on: thread)
-            }
-        } else if allowsJunkInContextMenu {
-            Button("Move to Junk", systemImage: "xmark.bin") {
-                perform(.junk, on: thread)
-            }
-        }
-
-        Divider()
-
-        if isTrashDestination {
-            Button("Restore", systemImage: "arrow.uturn.backward") {
-                perform(.restore, on: thread)
-            }
-        } else {
-            Button("Move to Trash", systemImage: "trash", role: .destructive) {
-                perform(.trash, on: thread)
             }
         }
     }
@@ -1499,53 +1469,6 @@ private struct RubidiumMailboxView: View {
         await refresh()
     }
 
-    private func perform(_ action: RubidiumMailAction, on thread: RubidiumThreadSummary) {
-        Task { _ = await store.perform(action, on: thread) }
-    }
-
-    private func reply(to thread: RubidiumThreadSummary) {
-        Task {
-            do {
-                let detail = try await store.loadThread(thread.id)
-                guard let message = detail.messages.last else { return }
-                composeRequest = .reply(detail, message)
-            } catch {
-                store.mailActionError = error.localizedDescription
-                RubidiumHaptics.shared.play(.error)
-            }
-        }
-    }
-
-    private var isTrashDestination: Bool {
-        destination.kind == .trash || destination.providerView == "trash"
-    }
-
-    private var isJunkDestination: Bool {
-        destination.kind == .junk || destination.providerView == "junk"
-    }
-
-    private var allowsArchiveInContextMenu: Bool {
-        switch destination.kind {
-        case .archive, .drafts, .sent, .junk, .trash:
-            false
-        case .provider:
-            !["archive", "drafts", "sent", "junk", "trash"].contains(destination.providerView ?? "")
-        default:
-            true
-        }
-    }
-
-    private var allowsJunkInContextMenu: Bool {
-        switch destination.kind {
-        case .drafts, .sent, .junk, .trash:
-            false
-        case .provider:
-            !["drafts", "sent", "junk", "trash"].contains(destination.providerView ?? "")
-        default:
-            true
-        }
-    }
-
     private func bulk(_ action: RubidiumMailAction) {
         let targets = store.threads.filter { selected.contains($0.id) }
         editMode = .inactive
@@ -1553,22 +1476,6 @@ private struct RubidiumMailboxView: View {
         Task {
             for thread in targets { _ = await store.perform(action, on: thread) }
         }
-    }
-}
-
-private struct RubidiumThreadContextPreview: View {
-    let thread: RubidiumThreadSummary
-
-    var body: some View {
-        RubidiumThreadRow(thread: thread)
-            .frame(width: 320)
-            .background(RubidiumTheme.elevated)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(.white.opacity(0.12), lineWidth: 0.75)
-            }
-            .shadow(color: .black.opacity(0.22), radius: 18, y: 10)
     }
 }
 
