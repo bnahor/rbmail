@@ -586,9 +586,12 @@ struct RubidiumWebView: UIViewRepresentable {
 
         private func handleAuthenticationCallback(_ url: URL) {
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-            let values = Dictionary(
-                uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
-            )
+            // OAuth callbacks can contain repeated keys. Keep the first value
+            // instead of trapping in Dictionary(uniqueKeysWithValues:).
+            var values: [String: String] = [:]
+            for item in components?.queryItems ?? [] where values[item.name] == nil {
+                values[item.name] = item.value ?? ""
+            }
             if url.path == "/error" || url.host == "error" {
                 model.errorMessage = values["message"] ?? "Authentication failed."
                 model.isLoading = false
@@ -605,24 +608,81 @@ struct RubidiumWebView: UIViewRepresentable {
             let destination = values["destination"]?.isEmpty == false
                 ? values["destination"]!
                 : "/"
-            guard let tokenData = try? JSONEncoder().encode(token),
-                  let destinationData = try? JSONEncoder().encode(destination),
-                  let tokenJSON = String(data: tokenData, encoding: .utf8),
-                  let destinationJSON = String(data: destinationData, encoding: .utf8) else { return }
-            let script = """
-            (async () => {
-              const response = await fetch('/api/auth/one-time-token/verify', {
-                method: 'POST',
-                headers: {'content-type': 'application/json'},
-                credentials: 'include',
-                body: JSON.stringify({token: \(tokenJSON)})
-              });
-              if (!response.ok) throw new Error('Session handoff failed');
-              location.assign(\(destinationJSON));
-            })().catch(error => location.assign('/settings?error=' + encodeURIComponent(error.message)));
-            """
-            webView.evaluateJavaScript(script)
-            RubidiumHaptics.shared.play(.success)
+            guard destination.hasPrefix("/"), !destination.hasPrefix("//"),
+                  let destinationURL = URL(string: destination, relativeTo: model.appURL)?.absoluteURL,
+                  destinationURL.host == model.appURL.host else {
+                model.errorMessage = "Rubidium received an invalid sign-in destination."
+                model.isLoading = false
+                RubidiumHaptics.shared.play(.error)
+                return
+            }
+
+            // The bootstrap page is JSON, not an application document. Running
+            // fetch() inside that hidden WKWebView can fail silently at the very
+            // end of OAuth. Verify natively, then transfer the resulting
+            // first-party session cookie into WebKit before opening the inbox.
+            Task { @MainActor in
+                do {
+                    let verifyURL = model.appURL.appendingPathComponent("api/auth/one-time-token/verify")
+                    var request = URLRequest(url: verifyURL)
+                    request.httpMethod = "POST"
+                    request.timeoutInterval = 30
+                    request.cachePolicy = .reloadIgnoringLocalCacheData
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.httpBody = try JSONSerialization.data(withJSONObject: ["token": token])
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    guard let http = response as? HTTPURLResponse,
+                          (200..<300).contains(http.statusCode) else {
+                        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                        let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                        throw RubidiumAPIError(
+                            status: status,
+                            message: payload?["message"] as? String ?? "The sign-in handoff failed (\(status)). Please try again.",
+                            code: nil
+                        )
+                    }
+                    var responseHeaders: [String: String] = [:]
+                    for (key, value) in http.allHeaderFields {
+                        if let key = key as? String, let value = value as? String {
+                            responseHeaders[key] = value
+                        }
+                    }
+                    let issuedCookies = HTTPCookie.cookies(
+                        withResponseHeaderFields: responseHeaders,
+                        for: verifyURL
+                    )
+                    guard issuedCookies.contains(where: { $0.name.contains("session_token") }) else {
+                        throw RubidiumAPIError(
+                            status: 0,
+                            message: "The sign-in handoff did not issue an app session. Please try again.",
+                            code: nil
+                        )
+                    }
+                    for cookie in issuedCookies {
+                        await withCheckedContinuation { continuation in
+                            webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) {
+                                continuation.resume()
+                            }
+                        }
+                    }
+                    let session: RubidiumSessionEnvelope = try await model.api("/api/session")
+                    guard session.authenticated, let email = session.user?.email else {
+                        throw RubidiumAPIError(
+                            status: 401,
+                            message: "The app could not confirm the new session. Please try again.",
+                            code: nil
+                        )
+                    }
+                    model.sessionState = .signedIn(email: email)
+                    model.errorMessage = nil
+                    webView.load(URLRequest(url: destinationURL))
+                    RubidiumHaptics.shared.play(.success)
+                } catch {
+                    model.errorMessage = error.localizedDescription
+                    model.isLoading = false
+                    RubidiumHaptics.shared.play(.error)
+                }
+            }
         }
 
         func refreshNativeSafeArea(in webView: WKWebView) {

@@ -35,6 +35,7 @@ export async function GET(
     );
   }
 
+  let destination: string;
   try {
     const grant = await auth.api.refreshToken({
       body: { providerId: provider },
@@ -51,15 +52,25 @@ export async function GET(
         syncAccountCalendars(account.id),
       ]);
     });
-    const destination = `/?connected=${encodeURIComponent(provider)}`;
-    if (native) return nativeSessionRedirect(request, destination);
-    return Response.redirect(new URL(destination, request.url));
+    destination = `/?connected=${encodeURIComponent(provider)}`;
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Provider connection failed.";
-    if (native) return nativeAuthError(message);
+    // Identity sign-in has already succeeded. A missing/expired mail grant or
+    // provider API failure must not discard that valid session.
+    console.error("Provider mailbox connection failed after sign-in", {
+      provider,
+      errorType: error instanceof Error ? error.name : "unknown",
+    });
+    const message = `${provider === "google" ? "Gmail" : "Outlook"} sign-in succeeded, but the mailbox could not be connected. Reconnect it here.`;
+    destination = `/settings?error=${encodeURIComponent(message)}`;
+  }
+
+  try {
+    if (native) return await nativeSessionRedirect(request, destination);
+    return Response.redirect(new URL(destination, request.url));
+  } catch {
+    if (native) return nativeAuthError("Sign-in succeeded, but the app session could not be transferred. Please try again.");
     return Response.redirect(
-      new URL(`/settings?error=${encodeURIComponent(message)}`, request.url),
+      new URL("/settings?error=Session+handoff+failed", request.url),
     );
   }
 }
